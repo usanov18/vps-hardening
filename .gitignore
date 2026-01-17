@@ -1,0 +1,5 @@
+
+# --- local junk / мусор (generated locally) ---
+hardening.sh.bak.*
+# TUI artifacts (sometimes pasted as box-drawing char filenames)
+│
