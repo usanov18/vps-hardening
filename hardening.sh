@@ -593,3 +593,30 @@ main() {
   tui_init
 
   # Do NOT start gauge befo
+cat >> /root/hardening.sh <<'EOF'
+re interactive dialogs (would block whiptail input).
+  interactive_setup
+  confirm_or_exit
+
+  gauge_start
+  gauge_update 0 "Initializing..."
+
+  apt_update_and_upgrade
+  apt_install
+
+  configure_sshd
+  checkpoint_optional_pause
+  configure_ufw
+  configure_fail2ban
+
+  gauge_stop
+
+  step "DONE / ГОТОВО"
+  warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
+  warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
+
+  tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
+}
+
+main "$@"
+EOF
