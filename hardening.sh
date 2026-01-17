@@ -144,13 +144,26 @@ tui_info() {
 tui_yesno() {
   local title="$1"
   local msg="$2"
+
+  # Try whiptail first, but NEVER die on whiptail issues under curl|bash.
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
+    local rc=0
+
+    set +e
     TERM="$term" whiptail --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
-    return $?
-  else
-    tty_yesno_prompt "$msg (y/n) [n]: "
+    rc=$?
+    set -e
+
+    # whiptail returns: 0=yes, 1=no. Anything else = broken environment -> fallback.
+    if [[ "$rc" == "0" ]]; then return 0; fi
+    if [[ "$rc" == "1" ]]; then return 1; fi
+
+    warn "whiptail failed (rc=$rc), falling back to text prompt via /dev/tty"
+    TUI_ENABLED="false"
   fi
+
+  tty_yesno_prompt "$msg (y/n) [n]: "
 }
 
 tui_input() {
@@ -158,14 +171,27 @@ tui_input() {
   local msg="$2"
   local default="$3"
   local out=""
+
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
-    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty >/dev/tty 2>/dev/tty)" || return 1
-    echo "$out"
-  else
-    out="$(tty_readline "$msg [$default]: " "$default")"
-    echo "$out"
+    local rc=0
+
+    set +e
+    # Use --output-fd to avoid fragile FD swapping under piped execution.
+    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty 2>/dev/tty)"
+    rc=$?
+    set -e
+
+    if [[ "$rc" == "0" ]]; then
+      echo "$out"; return 0
+    fi
+
+    warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
+    TUI_ENABLED="false"
   fi
+
+  out="$(tty_readline "$msg [$default]: " "$default")"
+  echo "$out"
 }
 
 gauge_start() {
