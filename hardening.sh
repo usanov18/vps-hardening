@@ -193,25 +193,36 @@ tui_input() {
   local default="$3"
   local out=""
   local rc=0
+  local tmp=""
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
 
+    tmp="$(mktemp -t vps-hardening-whiptail.XXXXXX)"
     set +e
-    # Robust under `curl|bash`:
-    # - read from /dev/tty
-    # - UI drawn via stderr
-    # - value captured via --output-fd 1 (stdout)
-    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty 2>/dev/tty)"
+    # Capture inputbox result reliably under `curl|bash`:
+    # - UI stays on /dev/tty
+    # - value goes to FD 3 -> tmp file (avoids weird PTY/cmd-subst duplication)
+    TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
+      --output-fd 3 \
+      </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
     rc=$?
     set -e
 
     if [[ "$rc" == "0" ]]; then
+      # take FIRST non-empty line only (some envs may write twice)
+      out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
+      rm -f "$tmp" || true
       out="${out//$''/}"
       out="$(printf '%s' "$out" | xargs)"
       echo "$out"
       return 0
-    elif [[ "$rc" == "1" ]]; then
+    fi
+
+    rm -f "$tmp" || true
+
+    # rc: 1=Cancel, else=broken env -> fallback
+    if [[ "$rc" == "1" ]]; then
       return 1
     fi
 
@@ -702,6 +713,6 @@ main() {
 
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
   main "$@"
 fi
