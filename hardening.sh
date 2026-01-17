@@ -197,12 +197,12 @@ tui_input() {
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
+    tmp="$(mktemp -t vps-hardening-input.XXXXXX)"
 
-    tmp="$(mktemp -t vps-hardening-whiptail.XXXXXX)"
     set +e
-    # Capture inputbox result reliably under `curl|bash`:
-    # - UI stays on /dev/tty
-    # - value goes to FD 3 -> tmp file (avoids weird PTY/cmd-subst duplication)
+    # Robust under curl|bash:
+    # - UI goes to /dev/tty
+    # - Result is written to $tmp via fd 3
     TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
       --output-fd 3 \
       </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
@@ -210,11 +210,9 @@ tui_input() {
     set -e
 
     if [[ "$rc" == "0" ]]; then
-      # take FIRST non-empty line only (some envs may write twice)
-      out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
+      out="$(head -n 1 "$tmp" 2>/dev/null || true)"
       rm -f "$tmp" || true
-      out="${out//$'
-'/}"
+      out="${out//$''/}"
       out="$(printf '%s' "$out" | xargs)"
       echo "$out"
       return 0
@@ -222,7 +220,6 @@ tui_input() {
 
     rm -f "$tmp" || true
 
-    # rc: 1=Cancel, else=broken env -> fallback
     if [[ "$rc" == "1" ]]; then
       return 1
     fi
@@ -232,11 +229,11 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$'
-'/}"
+  out="${out//$''/}"
   out="$(printf '%s' "$out" | xargs)"
   echo "$out"
 }
+
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
 
@@ -295,7 +292,10 @@ ask_port_loop() {
   local val=""
 
   while true; do
-    val="$(tui_input "$title" "$prompt" "$default")" || return 1
+    if ! val="$(tui_input "$title" "$prompt" "$default")"; then
+      return 1
+    fi
+
     val="${val//$'
 '/}"
     val="$(printf '%s' "$val" | xargs)"
@@ -313,6 +313,7 @@ ask_port_loop() {
     tui_msg "$title" "Invalid port: $val. Please enter 1..65535."
   done
 }
+
 ask_unique_port_loop() {
   local title="$1"
   local prompt="$2"
@@ -717,10 +718,11 @@ main() {
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
 # --- entrypoint ---
-# stdin-safe "sourced vs executed" guard (works under `curl | bash` even with `set -u`)
-if ( return 0 2>/dev/null ); then
-  # sourced: do nothing
-  :
-else
+# Run only when executed (including `curl | bash`), not when sourced.
+# Safe with `set -u`.
+# --- entrypoint ---
+# Run only when executed (including `curl | bash`), not when sourced.
+# Safe with `set -u`.
+if [[ "${BASH_SOURCE[0]-}" == "$0" ]]; then
   main "$@"
 fi
