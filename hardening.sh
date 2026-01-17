@@ -198,18 +198,14 @@ tui_input() {
     local term="${TERM:-xterm}"
 
     set +e
-    # Capture inputbox result reliably under `curl|bash`:
-    # - UI goes to /dev/tty
-    # - value is captured via --output-fd 3 (not fragile FD swapping)
-    out="$(
-      TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
-        --output-fd 3 \
-        </dev/tty 1>/dev/tty 2>/dev/tty 3>&1
-    )"
+    # Robust under `curl|bash`:
+    # - read from /dev/tty
+    # - UI drawn via stderr
+    # - value captured via --output-fd 1 (stdout)
+    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty 2>/dev/tty)"
     rc=$?
     set -e
 
-    # rc: 0=OK, 1=Cancel, else=broken env
     if [[ "$rc" == "0" ]]; then
       out="${out//$''/}"
       out="$(printf '%s' "$out" | xargs)"
@@ -286,7 +282,7 @@ ask_port_loop() {
   local val=""
 
   while true; do
-    val="$(tui_input "$title" "$prompt" "$default")" || true
+    val="$(tui_input "$title" "$prompt" "$default")" || return 1
     val="${val//$''/}"
     val="$(printf '%s' "$val" | xargs)"
 
