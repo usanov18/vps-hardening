@@ -38,14 +38,16 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
 
-# ---------- tty helpers (curl | bash safe input) ----------
-# When running via: curl ... | bash
-# stdin is the script stream (NOT a terminal), so read prompts must use /dev/tty.
-tty_require() {
-  [[ -r /dev/tty ]] || die "No TTY available for interactive input. Run in a real terminal (SSH session)."
+# ---------- tty helpers (curl | bash safe input + whiptail) ----------
+tty_available() {
+  [[ -r /dev/tty && -w /dev/tty ]]
 }
 
-tty_read() {
+tty_require() {
+  tty_available || die "No TTY available for interactive input. Run in a real terminal (SSH session)."
+}
+
+tty_readline() {
   local prompt="$1"
   local default="${2:-}"
   local out=""
@@ -60,7 +62,7 @@ tty_read() {
   echo "${out:-$default}"
 }
 
-tty_yesno() {
+tty_yesno_prompt() {
   local prompt="$1"
   local ans=""
 
@@ -99,8 +101,28 @@ GAUGE_FD=""
 GAUGE_PATH=""
 GAUGE_PID=""
 
+# Bootstrap whiptail early so TUI can be used even on a clean VM.
+bootstrap_tui() {
+  # If whiptail is already present, nothing to do.
+  command -v whiptail >/dev/null 2>&1 && return 0
+
+  # If there's no /dev/tty, TUI wouldn't work anyway; avoid extra apt noise.
+  tty_available || return 0
+
+  # Install only what's needed for UI.
+  warn "Bootstrapping UI (installing whiptail)..."
+  apt-get update -y
+  apt-get install -y whiptail
+}
+
+# NOTE:
+# For `curl | bash`, stdin is not a TTY, but we still want TUI if the user has a real terminal.
+# We consider TUI available when:
+# - whiptail exists
+# - stdout is a TTY (we can show dialogs)
+# - /dev/tty is accessible (we can read user input)
 has_tui() {
-  command -v whiptail >/dev/null 2>&1 && [[ -t 0 ]] && [[ -t 1 ]]
+  command -v whiptail >/dev/null 2>&1 && [[ -t 1 ]] && tty_available
 }
 
 tui_init() {
@@ -113,7 +135,7 @@ tui_msg() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --msgbox "$msg" 16 76
+    whiptail --title "$title" --msgbox "$msg" 16 76 </dev/tty
   else
     echo "$title: $msg"
   fi
@@ -123,7 +145,7 @@ tui_info() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --infobox "$msg" 10 76
+    whiptail --title "$title" --infobox "$msg" 10 76 </dev/tty
   else
     echo "$title: $msg"
   fi
@@ -133,10 +155,10 @@ tui_yesno() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --yesno "$msg" 16 76
+    whiptail --title "$title" --yesno "$msg" 16 76 </dev/tty
     return $?
   else
-    tty_yesno "$msg (y/n) [n]: "
+    tty_yesno_prompt "$msg (y/n) [n]: "
   fi
 }
 
@@ -146,10 +168,10 @@ tui_input() {
   local default="$3"
   local out=""
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3)" || return 1
+    out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3 </dev/tty)" || return 1
     echo "$out"
   else
-    out="$(tty_read "$msg [$default]: " "$default")"
+    out="$(tty_readline "$msg [$default]: " "$default")"
     echo "$out"
   fi
 }
@@ -158,7 +180,7 @@ gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
   GAUGE_PATH="/tmp/vps-hardening-gauge.$$"
   mkfifo "$GAUGE_PATH"
-  whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" &
+  whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" </dev/tty &
   GAUGE_PID="$!"
   exec {GAUGE_FD}>"$GAUGE_PATH"
 }
@@ -339,12 +361,12 @@ confirm_or_exit() {
   msg+="🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password."
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    if ! whiptail --title "Confirm" --yesno "$msg\n\nProceed / Продолжить?" 18 76; then
+    if ! whiptail --title "Confirm" --yesno "$msg\n\nProceed / Продолжить?" 18 76 </dev/tty; then
       die "Aborted by user."
     fi
   else
     local ans=""
-    ans="$(tty_read "Proceed / Продолжить? (y/n) [n]: " "n")"
+    ans="$(tty_readline "Proceed / Продолжить? (y/n) [n]: " "n")"
     [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user."
   fi
 }
@@ -489,11 +511,11 @@ checkpoint_optional_pause() {
     "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.\nЕсли вход НЕ работает — нажми Cancel и НЕ продолжай.\n\n🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.\nIf it does NOT work — press Cancel and do NOT continue."
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "Proceed?" --yesno "Proceed to enable UFW now? / Продолжить и включить UFW?" 12 76 \
+    whiptail --title "Proceed?" --yesno "Proceed to enable UFW now? / Продолжить и включить UFW?" 12 76 </dev/tty \
       || die "Aborted by user (SSH test checkpoint)."
   else
     local ans=""
-    ans="$(tty_read "Proceed to enable UFW now? (y/n) [n]: " "n")"
+    ans="$(tty_readline "Proceed to enable UFW now? (y/n) [n]: " "n")"
     [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user (SSH test checkpoint)."
   fi
 }
@@ -569,11 +591,13 @@ EOF
 }
 
 main() {
+  # Ensure UI can work on a clean machine before interactive setup
+  require_root
+  bootstrap_tui
   tui_init
+
   gauge_start
   gauge_update 0 "Initializing..."
-
-  require_root
 
   interactive_setup
   confirm_or_exit
