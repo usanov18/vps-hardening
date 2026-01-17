@@ -530,10 +530,14 @@ apply_ssh_socket_port_override() {
 
   mkdir -p /etc/systemd/system/ssh.socket.d
 
+  # IMPORTANT:
+  # Some systems may end up with IPv6-only listener ([::]:port), which breaks IPv4 access.
+  # Bind explicitly on both IPv4 and IPv6 to avoid lockouts.
   cat >/etc/systemd/system/ssh.socket.d/override.conf <<EOF
 [Socket]
 ListenStream=
-ListenStream=${port}
+ListenStream=0.0.0.0:${port}
+ListenStream=[::]:${port}
 EOF
 
   systemctl daemon-reload
@@ -545,7 +549,8 @@ rollback_ssh_socket_override_to_22() {
   cat >/etc/systemd/system/ssh.socket.d/override.conf <<EOF
 [Socket]
 ListenStream=
-ListenStream=22
+ListenStream=0.0.0.0:22
+ListenStream=[::]:22
 EOF
   systemctl daemon-reload
   systemctl restart ssh.socket || true
@@ -558,6 +563,15 @@ assert_ssh_service_active() {
 assert_listening_port() {
   local port="$1"
   ss -lnt 2>/dev/null | grep -qE "LISTEN.+:${port}\b"
+}
+
+assert_listening_port_ipv4() {
+  local port="$1"
+  # Expect an IPv4 listener like 0.0.0.0:port or A.B.C.D:port (ss prints IPv6 as [::]:port).
+  ss -lnt 2>/dev/null | awk -v p=":"port '
+    $1=="LISTEN" && $4 ~ (p"$") && $4 !~ /^\[::\]/ { ok=1 }
+    END { exit(ok?0:1) }
+  '
 }
 
 configure_sshd() {
@@ -593,6 +607,13 @@ configure_sshd() {
     warn "🇷🇺 Обнаружен ssh.socket (socket activation). Применяю override на порт ${SSH_PORT}."
     warn "🇬🇧 Detected ssh.socket (socket activation). Applying override for port ${SSH_PORT}."
     apply_ssh_socket_port_override "${SSH_PORT}"
+
+    # Safety: ensure IPv4 is actually listening (avoid IPv6-only lockouts)
+    if ! assert_listening_port_ipv4 "${SSH_PORT}"; then
+      warn "🇷🇺 ВНИМАНИЕ: SSH слушает порт ${SSH_PORT} только по IPv6. Исправляю на IPv4+IPv6 (0.0.0.0 + [::])."
+      warn "🇬🇧 WARNING: SSH appears IPv6-only on port ${SSH_PORT}. Fixing to bind IPv4+IPv6 (0.0.0.0 + [::])."
+      apply_ssh_socket_port_override "${SSH_PORT}"
+    fi
   fi
 
   log "Restarting SSH service..."
@@ -607,6 +628,14 @@ configure_sshd() {
     warn "Debug hint: ss -lntp | grep -E ':(22|${SSH_PORT})\\b'"
     warn "Debug hint: systemctl status ssh.socket (if enabled)"
     if ssh_socket_enabled_or_active; then
+      # If socket activation is used, require IPv4 listener too (most users connect over IPv4).
+      if ! assert_listening_port_ipv4 "${SSH_PORT}"; then
+        warn "SSH is NOT listening on IPv4 for port ${SSH_PORT} (IPv6-only). This can lock you out."
+        warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
+        rollback_ssh_socket_override_to_22
+        die "Do NOT close your current session. Fix IPv4 SSH listening before continuing."
+      fi
+
       warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
       rollback_ssh_socket_override_to_22
     fi
