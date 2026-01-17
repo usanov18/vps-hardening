@@ -123,7 +123,7 @@ tui_msg() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --msgbox "$msg" 16 76 </dev/tty
+    TERM=${TERM:-xterm} whiptail --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
   else
     echo "$title: $msg"
   fi
@@ -133,7 +133,7 @@ tui_info() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --infobox "$msg" 10 76 </dev/tty
+    TERM=${TERM:-xterm} whiptail --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
   else
     echo "$title: $msg"
   fi
@@ -143,7 +143,7 @@ tui_yesno() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "$title" --yesno "$msg" 16 76 </dev/tty
+    TERM=${TERM:-xterm} whiptail --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
     return $?
   else
     tty_yesno_prompt "$msg (y/n) [n]: "
