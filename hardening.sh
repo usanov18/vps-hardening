@@ -123,7 +123,8 @@ tui_msg() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    TERM=${TERM:-xterm} whiptail --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    local term="${TERM:-xterm}"
+    TERM="$term" whiptail --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
   else
     echo "$title: $msg"
   fi
@@ -133,7 +134,8 @@ tui_info() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    TERM=${TERM:-xterm} whiptail --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
+    local term="${TERM:-xterm}"
+    TERM="$term" whiptail --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
   else
     echo "$title: $msg"
   fi
@@ -157,7 +159,8 @@ tui_input() {
   local default="$3"
   local out=""
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3 </dev/tty)" || return 1
+    local term="${TERM:-xterm}"
+    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty >/dev/tty 2>/dev/tty)" || return 1
     echo "$out"
   else
     out="$(tty_readline "$msg [$default]: " "$default")"
