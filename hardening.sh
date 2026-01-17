@@ -143,7 +143,8 @@ tui_yesno() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    TERM=${TERM:-xterm} whiptail --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    local term="${TERM:-xterm}"
+    TERM="$term" whiptail --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
     return $?
   else
     tty_yesno_prompt "$msg (y/n) [n]: "
