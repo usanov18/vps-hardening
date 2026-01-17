@@ -197,7 +197,13 @@ tui_input() {
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
-    tmp="$(mktemp -t vps-hardening-input.XXXXXX)"
+
+    # temp file for capturing whiptail output (prevents stdout leaks under curl|bash)
+    tmp="$(mktemp -t vps-hardening-input.XXXXXX)" || tmp=""
+    if [[ -n "$tmp" ]]; then
+      # Always cleanup temp file
+      trap 'rm -f "$tmp" 2>/dev/null || true' RETURN
+    fi
 
     set +e
     # Robust under curl|bash:
@@ -209,19 +215,16 @@ tui_input() {
     rc=$?
     set -e
 
+    # rc: 0=OK, 1=Cancel, else=broken env
     if [[ "$rc" == "0" ]]; then
-      out="$(head -n 1 "$tmp" 2>/dev/null || true)"
-      rm -f "$tmp" || true
-      out="${out//$'
-'/}"
+      # Some environments may write value twice; take first non-empty line.
+      out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
+      out="${out//$''/}"
       out="$(printf '%s' "$out" | xargs)"
-      echo "$out"
+      printf '%s
+' "$out"
       return 0
-    fi
-
-    rm -f "$tmp" || true
-
-    if [[ "$rc" == "1" ]]; then
+    elif [[ "$rc" == "1" ]]; then
       return 1
     fi
 
@@ -230,12 +233,11 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$'
-'/}"
+  out="${out//$''/}"
   out="$(printf '%s' "$out" | xargs)"
-  echo "$out"
+  printf '%s
+' "$out"
 }
-
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
 
@@ -300,8 +302,7 @@ ask_port_loop() {
     fi
 
     # sanitize: drop CR, trim whitespace
-    val="${val//$'
-'/}"
+    val="${val//$''/}"
     val="$(printf '%s' "$val" | xargs)"
 
     if [[ -z "$val" ]]; then
@@ -310,14 +311,14 @@ ask_port_loop() {
     fi
 
     if is_valid_port "$val"; then
-      echo "$val"
+      printf '%s
+' "$val"
       return 0
     fi
 
     tui_msg "$title" "Invalid port: $val. Please enter 1..65535."
   done
 }
-
 ask_unique_port_loop() {
   local title="$1"
   local prompt="$2"
