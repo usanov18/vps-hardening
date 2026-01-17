@@ -219,7 +219,8 @@ tui_input() {
     if [[ "$rc" == "0" ]]; then
       # Some environments may write value twice; take first non-empty line.
       out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
-      out="${out//$''/}"
+      out="${out//$'
+'/}"
       out="$(printf '%s' "$out" | xargs)"
       printf '%s
 ' "$out"
@@ -233,7 +234,8 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$''/}"
+  out="${out//$'
+'/}"
   out="$(printf '%s' "$out" | xargs)"
   printf '%s
 ' "$out"
@@ -302,7 +304,8 @@ ask_port_loop() {
     fi
 
     # sanitize: drop CR, trim whitespace
-    val="${val//$''/}"
+    val="${val//$'
+'/}"
     val="$(printf '%s' "$val" | xargs)"
 
     if [[ -z "$val" ]]; then
@@ -724,11 +727,10 @@ main() {
 }
 
 # --- entrypoint ---
-# stdin-safe "sourced vs executed" guard (works under `curl | bash` even with `set -u`)
-# If sourced: `return` is valid and succeeds.
-# If executed (including piped): `return` fails -> we run main.
-if ( return 0 2>/dev/null ); then
+# Safe "sourced vs executed" guard (works with set -euo pipefail and curl|bash)
+if [[ "${BASH_SOURCE[0]:-}" != "$0" ]]; then
   :
 else
   main "$@"
 fi
+
