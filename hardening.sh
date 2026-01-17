@@ -198,44 +198,42 @@ tui_input() {
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
 
-    # temp file for capturing whiptail output (prevents stdout leaks under curl|bash)
     tmp="$(mktemp -t vps-hardening-input.XXXXXX)" || tmp=""
-    if [[ -n "$tmp" ]]; then
-      # Always cleanup temp file
-      trap 'rm -f "$tmp" 2>/dev/null || true' RETURN
-    fi
+    if [[ -z "$tmp" ]]; then
+      warn "mktemp failed, falling back to text prompt via /dev/tty"
+      TUI_ENABLED="false"
+    else
+      set +e
+      TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
+        --output-fd 3 \
+        </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
+      rc=$?
+      set -e
 
-    set +e
-    # Robust under curl|bash:
-    # - UI goes to /dev/tty
-    # - Result is written to $tmp via fd 3
-    TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
-      --output-fd 3 \
-      </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
-    rc=$?
-    set -e
-
-    # rc: 0=OK, 1=Cancel, else=broken env
-    if [[ "$rc" == "0" ]]; then
-      # Some environments may write value twice; take first non-empty line.
-      out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
-      out="${out//$'
-'/}"
-      out="$(printf '%s' "$out" | xargs)"
-      printf '%s
+      if [[ "$rc" == "0" ]]; then
+        # Some environments may write value twice; take first non-empty line.
+        out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
+        rm -f "$tmp" 2>/dev/null || true
+        out="${out//$''/}"
+        out="$(printf '%s' "$out" | xargs)"
+        printf '%s
 ' "$out"
-      return 0
-    elif [[ "$rc" == "1" ]]; then
-      return 1
-    fi
+        return 0
+      fi
 
-    warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
-    TUI_ENABLED="false"
+      rm -f "$tmp" 2>/dev/null || true
+
+      if [[ "$rc" == "1" ]]; then
+        return 1
+      fi
+
+      warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
+      TUI_ENABLED="false"
+    fi
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$'
-'/}"
+  out="${out//$''/}"
   out="$(printf '%s' "$out" | xargs)"
   printf '%s
 ' "$out"
@@ -304,8 +302,7 @@ ask_port_loop() {
     fi
 
     # sanitize: drop CR, trim whitespace
-    val="${val//$'
-'/}"
+    val="${val//$''/}"
     val="$(printf '%s' "$val" | xargs)"
 
     if [[ -z "$val" ]]; then
@@ -727,8 +724,10 @@ main() {
 }
 
 # --- entrypoint ---
-# Safe "sourced vs executed" guard (works with set -euo pipefail and curl|bash)
-if [[ "${BASH_SOURCE[0]:-}" != "$0" ]]; then
+# stdin-safe "sourced vs executed" guard:
+# - when sourced: `return` succeeds -> do nothing
+# - when executed (including `curl | bash`): `return` fails -> run main
+if ( return 0 2>/dev/null ); then
   :
 else
   main "$@"
