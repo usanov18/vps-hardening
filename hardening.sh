@@ -101,26 +101,20 @@ GAUGE_FD=""
 GAUGE_PATH=""
 GAUGE_PID=""
 
-# Bootstrap whiptail early so TUI can be used even on a clean VM.
+# Install whiptail early so TUI can be used on a clean VM.
 bootstrap_tui() {
-  # If whiptail is already present, nothing to do.
   command -v whiptail >/dev/null 2>&1 && return 0
-
-  # If there's no /dev/tty, TUI wouldn't work anyway; avoid extra apt noise.
   tty_available || return 0
-
-  # Install only what's needed for UI.
   warn "Bootstrapping UI (installing whiptail)..."
   apt-get update -y
   apt-get install -y whiptail
 }
 
-# NOTE:
-# For `curl | bash`, stdin is not a TTY, but we still want TUI if the user has a real terminal.
-# We consider TUI available when:
+# For `curl | bash`, stdin is not a TTY. We still want TUI if user has a real terminal.
+# Conditions:
 # - whiptail exists
-# - stdout is a TTY (we can show dialogs)
-# - /dev/tty is accessible (we can read user input)
+# - stdout is a TTY
+# - /dev/tty is available for input
 has_tui() {
   command -v whiptail >/dev/null 2>&1 && [[ -t 1 ]] && tty_available
 }
@@ -171,8 +165,8 @@ tui_input() {
     out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3 </dev/tty)" || return 1
     echo "$out"
   else
-    out="$(tty_readline "$msg [$default]: " "$default")"
-    echo "$out"
+    read -r -p "$msg [$default]: " out </dev/tty
+    echo "${out:-$default}"
   fi
 }
 
@@ -252,8 +246,6 @@ ask_unique_port_loop() {
 
 # ---------- state load/save ----------
 load_last_ports() {
-  # 🇷🇺 Загружаем порты из прошлого запуска (если файл есть)
-  # 🇬🇧 Load ports from previous run (if file exists)
   if [[ -f "$STATE_FILE" ]]; then
     # shellcheck disable=SC1090
     source "$STATE_FILE" || true
@@ -261,8 +253,6 @@ load_last_ports() {
 }
 
 save_last_ports() {
-  # 🇷🇺 Сохраняем выбранные порты для следующего запуска
-  # 🇬🇧 Save selected ports for the next run
   mkdir -p "$STATE_DIR"
   cat > "$STATE_FILE" <<EOF
 SSH_PORT=${SSH_PORT}
@@ -322,7 +312,6 @@ interactive_setup() {
     INBOUND_PORT=""
   fi
 
-  # Optional pause setting (only relevant if SSH port changes)
   if [[ "$SSH_PORT" != "22" ]]; then
     if tui_yesno "Safety pause" \
       "Pause before enabling UFW to test SSH on the NEW port?\n\n🇷🇺 Пауза перед включением UFW, чтобы проверить вход по НОВОМУ SSH порту?\n\nDefault: Yes"; then
@@ -417,8 +406,6 @@ set_sshd_kv() {
 }
 
 ensure_run_sshd_dir() {
-  # 🇷🇺 /run — tmpfs, /run/sshd может отсутствовать на свежих системах
-  # 🇬🇧 /run is tmpfs, /run/sshd may be missing on fresh systems
   if [[ -e /run/sshd && ! -d /run/sshd ]]; then
     die "/run/sshd exists but is not a directory"
   fi
@@ -433,8 +420,6 @@ ssh_socket_active() {
 }
 
 apply_ssh_socket_port_override() {
-  # 🇷🇺 Если используется ssh.socket, задаём ListenStream через override (ТОЛЬКО выбранный порт).
-  # 🇬🇧 If ssh.socket is used, set ListenStream via override (ONLY selected port).
   local port="$1"
 
   mkdir -p /etc/systemd/system/ssh.socket.d
@@ -471,7 +456,6 @@ configure_sshd() {
   log "Setting SSH Port = ${SSH_PORT}"
   set_sshd_kv "Port" "${SSH_PORT}"
 
-  # Bootstrap-friendly (do not disable root/password auth)
   set_sshd_kv "PermitEmptyPasswords" "no"
   set_sshd_kv "ChallengeResponseAuthentication" "no"
   set_sshd_kv "UsePAM" "yes"
@@ -591,16 +575,16 @@ EOF
 }
 
 main() {
-  # Ensure UI can work on a clean machine before interactive setup
   require_root
   bootstrap_tui
   tui_init
 
-  gauge_start
-  gauge_update 0 "Initializing..."
-
+  # Do NOT start gauge before interactive dialogs: gauge takes over the terminal.
   interactive_setup
   confirm_or_exit
+
+  gauge_start
+  gauge_update 0 "Initializing..."
 
   apt_update_and_upgrade
   apt_install
