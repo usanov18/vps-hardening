@@ -110,8 +110,9 @@ bootstrap_tui() {
 }
 
 has_tui() {
-  command -v whiptail >/dev/null 2>&1 && tty_available
+  command -v whiptail >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
 }
+
 
 
 tui_init() {
@@ -198,8 +199,7 @@ tui_input() {
     local rc=0
 
     set +e
-    # Use --output-fd to avoid fragile FD swapping under piped execution.
-    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" --output-fd 1 </dev/tty 2>/dev/tty)"
+    out="$(TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>/dev/tty 2>/dev/tty </dev/tty)"
     rc=$?
     set -e
 
@@ -214,6 +214,7 @@ tui_input() {
   out="$(tty_readline "$msg [$default]: " "$default")"
   echo "$out"
 }
+
 
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
