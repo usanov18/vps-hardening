@@ -27,7 +27,7 @@ set -euo pipefail
 
 # ---------- output helpers ----------
 log()  { echo "[$(date -Is)] $*"; }
-warn() { echo "[$(date -Is)] [WARNING] $*"; }
+warn() { echo "[$(date -Is)] [WARNING] $*" >&2; }
 step() { echo; echo "========== $* =========="; }
 die()  { echo "ERROR: $*" >&2; exit 1; }
 
