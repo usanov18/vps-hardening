@@ -338,19 +338,28 @@ confirm_or_exit() {
   echo
 
   local msg
-  msg="🇷🇺 Выбранные порты:\nSSH: ${SSH_PORT}\nPanel: ${panel_txt}\nInbound: ${inbound_txt}\n\n"
-  msg+="🇷🇺 Важно: скрипт НЕ управляет SSH ключами и НЕ отключает root/password.\n\n"
-  msg+="🇬🇧 Selected ports:\nSSH: ${SSH_PORT}\nPanel: ${panel_txt}\nInbound: ${inbound_txt}\n\n"
-  msg+="🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password."
+  msg="$(printf '%b' \
+"🇷🇺 Выбранные порты:
+SSH: ${SSH_PORT}
+Panel: ${panel_txt}
+Inbound: ${inbound_txt}
 
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    if ! whiptail --title "Confirm" --yesno "$msg\n\nProceed / Продолжить?" 18 76 </dev/tty; then
-      die "Aborted by user."
-    fi
-  else
-    local ans=""
-    ans="$(tty_readline "Proceed / Продолжить? (y/n) [n]: " "n")"
-    [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user."
+\
+🇷🇺 Важно: скрипт НЕ управляет SSH ключами и НЕ отключает root/password.
+
+\
+🇬🇧 Selected ports:
+SSH: ${SSH_PORT}
+Panel: ${panel_txt}
+Inbound: ${inbound_txt}
+
+\
+🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password.
+")"
+
+  if ! tui_yesno "Confirm" "${msg}
+Proceed / Продолжить?"; then
+    die "Aborted by user."
   fi
 }
 
@@ -505,15 +514,14 @@ checkpoint_optional_pause() {
   [[ "$ENABLE_TEST_PAUSE" == "yes" && "$SSH_PORT" != "22" ]] || return 0
 
   tui_msg "Checkpoint" \
-    "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.\nЕсли вход НЕ работает — нажми Cancel и НЕ продолжай.\n\n🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.\nIf it does NOT work — press Cancel and do NOT continue."
+    "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.
+Если вход НЕ работает — нажми Cancel и НЕ продолжай.
 
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    whiptail --title "Proceed?" --yesno "Proceed to enable UFW now? / Продолжить и включить UFW?" 12 76 </dev/tty \
-      || die "Aborted by user (SSH test checkpoint)."
-  else
-    local ans=""
-    ans="$(tty_readline "Proceed to enable UFW now? (y/n) [n]: " "n")"
-    [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user (SSH test checkpoint)."
+🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.
+If it does NOT work — press Cancel and do NOT continue."
+
+  if ! tui_yesno "Proceed?" "Proceed to enable UFW now? / Продолжить и включить UFW?"; then
+    die "Aborted by user (SSH test checkpoint)."
   fi
 }
 
