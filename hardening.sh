@@ -213,7 +213,8 @@ tui_input() {
       # take FIRST non-empty line only (some envs may write twice)
       out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
       rm -f "$tmp" || true
-      out="${out//$''/}"
+      out="${out//$'
+'/}"
       out="$(printf '%s' "$out" | xargs)"
       echo "$out"
       return 0
@@ -231,7 +232,8 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$''/}"
+  out="${out//$'
+'/}"
   out="$(printf '%s' "$out" | xargs)"
   echo "$out"
 }
@@ -294,7 +296,8 @@ ask_port_loop() {
 
   while true; do
     val="$(tui_input "$title" "$prompt" "$default")" || return 1
-    val="${val//$''/}"
+    val="${val//$'
+'/}"
     val="$(printf '%s' "$val" | xargs)"
 
     if [[ -z "$val" ]]; then
@@ -713,6 +716,11 @@ main() {
 
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
-if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+# --- entrypoint ---
+# stdin-safe "sourced vs executed" guard (works under `curl | bash` even with `set -u`)
+if ( return 0 2>/dev/null ); then
+  # sourced: do nothing
+  :
+else
   main "$@"
 fi
