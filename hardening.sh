@@ -168,7 +168,7 @@ gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
   GAUGE_PATH="/tmp/vps-hardening-gauge.$$"
   mkfifo "$GAUGE_PATH"
-  whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" </dev/tty &
+  whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" >/dev/tty 2>/dev/tty whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" </dev/tty &
   GAUGE_PID="$!"
   exec {GAUGE_FD}>"$GAUGE_PATH"
 }
