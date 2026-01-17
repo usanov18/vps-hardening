@@ -101,7 +101,6 @@ GAUGE_FD=""
 GAUGE_PATH=""
 GAUGE_PID=""
 
-# Install whiptail early so TUI can be used on a clean VM.
 bootstrap_tui() {
   command -v whiptail >/dev/null 2>&1 && return 0
   tty_available || return 0
@@ -110,11 +109,6 @@ bootstrap_tui() {
   apt-get install -y whiptail
 }
 
-# For `curl | bash`, stdin is not a TTY. We still want TUI if user has a real terminal.
-# Conditions:
-# - whiptail exists
-# - stdout is a TTY
-# - /dev/tty is available for input
 has_tui() {
   command -v whiptail >/dev/null 2>&1 && [[ -t 1 ]] && tty_available
 }
@@ -165,8 +159,8 @@ tui_input() {
     out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3 </dev/tty)" || return 1
     echo "$out"
   else
-    read -r -p "$msg [$default]: " out </dev/tty
-    echo "${out:-$default}"
+    out="$(tty_readline "$msg [$default]: " "$default")"
+    echo "$out"
   fi
 }
 
@@ -415,8 +409,13 @@ ensure_run_sshd_dir() {
   fi
 }
 
-ssh_socket_active() {
-  systemctl is-enabled --quiet ssh.socket 2>/dev/null && systemctl is-active --quiet ssh.socket 2>/dev/null
+# ssh.socket can be enabled/active on Ubuntu 24+. If it exists and is enabled/active,
+# the listening port is controlled by the socket unit, not sshd_config.
+ssh_socket_enabled_or_active() {
+  systemctl list-unit-files ssh.socket >/dev/null 2>&1 || return 1
+  systemctl is-enabled --quiet ssh.socket 2>/dev/null && return 0
+  systemctl is-active --quiet ssh.socket 2>/dev/null && return 0
+  return 1
 }
 
 apply_ssh_socket_port_override() {
@@ -432,6 +431,17 @@ EOF
 
   systemctl daemon-reload
   systemctl restart ssh.socket
+}
+
+rollback_ssh_socket_override_to_22() {
+  mkdir -p /etc/systemd/system/ssh.socket.d
+  cat >/etc/systemd/system/ssh.socket.d/override.conf <<EOF
+[Socket]
+ListenStream=
+ListenStream=22
+EOF
+  systemctl daemon-reload
+  systemctl restart ssh.socket || true
 }
 
 assert_ssh_service_active() {
@@ -456,6 +466,7 @@ configure_sshd() {
   log "Setting SSH Port = ${SSH_PORT}"
   set_sshd_kv "Port" "${SSH_PORT}"
 
+  # Bootstrap-friendly (do not disable root/password auth)
   set_sshd_kv "PermitEmptyPasswords" "no"
   set_sshd_kv "ChallengeResponseAuthentication" "no"
   set_sshd_kv "UsePAM" "yes"
@@ -465,7 +476,8 @@ configure_sshd() {
   log "Validating sshd_config (sshd -t)..."
   sshd -t
 
-  if ssh_socket_active; then
+  # If socket activation is used, the port must be changed via ssh.socket override.
+  if ssh_socket_enabled_or_active; then
     warn "🇷🇺 Обнаружен ssh.socket (socket activation). Применяю override на порт ${SSH_PORT}."
     warn "🇬🇧 Detected ssh.socket (socket activation). Applying override for port ${SSH_PORT}."
     apply_ssh_socket_port_override "${SSH_PORT}"
@@ -478,10 +490,16 @@ configure_sshd() {
     die "SSH service is NOT active after restart. Do NOT close your current session."
   fi
 
+  # If ssh.socket is enabled/active, the listener is owned by systemd; otherwise by sshd.
   if ! assert_listening_port "${SSH_PORT}"; then
-    warn "Debug hint: ss -lntp | grep sshd"
+    warn "SSH does NOT appear to be listening on port ${SSH_PORT}."
+    warn "Debug hint: ss -lntp | grep -E ':(22|${SSH_PORT})\\b'"
     warn "Debug hint: systemctl status ssh.socket (if enabled)"
-    die "SSH does NOT appear to be listening on port ${SSH_PORT}. Do NOT close your current session."
+    if ssh_socket_enabled_or_active; then
+      warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
+      rollback_ssh_socket_override_to_22
+    fi
+    die "Do NOT close your current session. Fix SSH port before continuing."
   fi
 
   log "SSH is active and listening on port ${SSH_PORT}."
@@ -579,7 +597,7 @@ main() {
   bootstrap_tui
   tui_init
 
-  # Do NOT start gauge before interactive dialogs: gauge takes over the terminal.
+  # Do NOT start gauge before interactive dialogs (would block whiptail input).
   interactive_setup
   confirm_or_exit
 
