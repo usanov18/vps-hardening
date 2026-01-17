@@ -294,10 +294,12 @@ ask_port_loop() {
   local val=""
 
   while true; do
+    # NOTE: tui_input returns non-zero on Cancel
     if ! val="$(tui_input "$title" "$prompt" "$default")"; then
       return 1
     fi
 
+    # sanitize: drop CR, trim whitespace
     val="${val//$'
 '/}"
     val="$(printf '%s' "$val" | xargs)"
@@ -719,10 +721,13 @@ main() {
 
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
+
 # --- entrypoint ---
-# stdin-safe "sourced vs executed" guard (works with `set -u`)
-# --- entrypoint ---
-# stdin-safe "sourced vs executed" guard (works with `set -u`)
-if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
+# stdin-safe "sourced vs executed" guard (works under `curl | bash` even with `set -u`)
+# If sourced: `return` is valid and succeeds.
+# If executed (including piped): `return` fails -> we run main.
+if ( return 0 2>/dev/null ); then
+  :
+else
   main "$@"
 fi
