@@ -125,22 +125,42 @@ tui_msg() {
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
+    local rc=0
+    set +e
     TERM="$term" whiptail --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    rc=$?
+    set -e
+    if [[ "$rc" != "0" ]]; then
+      warn "whiptail msgbox failed (rc=$rc), falling back to text output"
+      TUI_ENABLED="false"
+      echo "$title: $msg" >&2
+    fi
   else
-    echo "$title: $msg"
+    echo "$title: $msg" >&2
   fi
 }
+
 
 tui_info() {
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
+    local rc=0
+    set +e
     TERM="$term" whiptail --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
+    rc=$?
+    set -e
+    if [[ "$rc" != "0" ]]; then
+      warn "whiptail infobox failed (rc=$rc), falling back to text output"
+      TUI_ENABLED="false"
+      echo "$title: $msg" >&2
+    fi
   else
-    echo "$title: $msg"
+    echo "$title: $msg" >&2
   fi
 }
+
 
 tui_yesno() {
   local title="$1"
