@@ -214,7 +214,8 @@ tui_input() {
         # Some environments may write value twice; take first non-empty line.
         out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
         rm -f "$tmp" 2>/dev/null || true
-        out="${out//$''/}"
+        out="${out//$'
+'/}"
         out="$(printf '%s' "$out" | xargs)"
         printf '%s
 ' "$out"
@@ -233,7 +234,8 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$''/}"
+  out="${out//$'
+'/}"
   out="$(printf '%s' "$out" | xargs)"
   printf '%s
 ' "$out"
@@ -302,7 +304,8 @@ ask_port_loop() {
     fi
 
     # sanitize: drop CR, trim whitespace
-    val="${val//$''/}"
+    val="${val//$'
+'/}"
     val="$(printf '%s' "$val" | xargs)"
 
     if [[ -z "$val" ]]; then
@@ -568,7 +571,13 @@ configure_sshd() {
   warn "🇬🇧 Keep current SSH session; test login on new port in a separate window."
 
   log "Setting SSH Port = ${SSH_PORT}"
-  set_sshd_kv "Port" "${SSH_PORT}"
+  # Temporary dual-port mode for safety
+  if [[ "$SSH_PORT" != "22" ]]; then
+    set_sshd_kv "Port" "22"
+    echo "Port ${SSH_PORT}" >> /etc/ssh/sshd_config
+  else
+    set_sshd_kv "Port" "22"
+  fi
 
   # Bootstrap-friendly (do not disable root/password auth)
   set_sshd_kv "PermitEmptyPasswords" "no"
@@ -617,6 +626,11 @@ checkpoint_optional_pause() {
 
 🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.
 If it does NOT work — press Cancel and do NOT continue."
+
+  if [[ "$SSH_PORT" != "22" ]]; then
+    sed -i -E '/^\s*Port\s+22\s*$/d' /etc/ssh/sshd_config
+    systemctl restart ssh
+  fi
 
   if ! tui_yesno "Proceed?" "Proceed to enable UFW now? / Продолжить и включить UFW?"; then
     die "Aborted by user (SSH test checkpoint)."
