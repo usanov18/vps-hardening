@@ -110,8 +110,9 @@ bootstrap_tui() {
 }
 
 has_tui() {
-  command -v whiptail >/dev/null 2>&1 && [[ -t 1 ]] && tty_available
+  command -v whiptail >/dev/null 2>&1 && tty_available
 }
+
 
 tui_init() {
   if has_tui; then
@@ -196,12 +197,21 @@ tui_input() {
 
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
+
+  local term="${TERM:-xterm}"
+
   GAUGE_PATH="/tmp/vps-hardening-gauge.$$"
   mkfifo "$GAUGE_PATH"
-  whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" >/dev/tty 2>/dev/tty whiptail --title "VPS Hardening" --gauge "Starting..." 10 76 0 <"$GAUGE_PATH" </dev/tty &
+
+  set +e
+  TERM="$term" whiptail --clear --title "VPS Hardening" --gauge "Starting..." 10 76 0 \
+    <"$GAUGE_PATH" >/dev/tty 2>/dev/tty &
+  set -e
+
   GAUGE_PID="$!"
   exec {GAUGE_FD}>"$GAUGE_PATH"
 }
+
 
 gauge_update() {
   local pct="$1"
