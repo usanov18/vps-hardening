@@ -212,7 +212,8 @@ tui_input() {
     if [[ "$rc" == "0" ]]; then
       out="$(head -n 1 "$tmp" 2>/dev/null || true)"
       rm -f "$tmp" || true
-      out="${out//$''/}"
+      out="${out//$'
+'/}"
       out="$(printf '%s' "$out" | xargs)"
       echo "$out"
       return 0
@@ -229,7 +230,8 @@ tui_input() {
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$''/}"
+  out="${out//$'
+'/}"
   out="$(printf '%s' "$out" | xargs)"
   echo "$out"
 }
@@ -718,11 +720,9 @@ main() {
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
 # --- entrypoint ---
-# Run only when executed (including `curl | bash`), not when sourced.
-# Safe with `set -u`.
+# stdin-safe "sourced vs executed" guard (works with `set -u`)
 # --- entrypoint ---
-# Run only when executed (including `curl | bash`), not when sourced.
-# Safe with `set -u`.
-if [[ "${BASH_SOURCE[0]-}" == "$0" ]]; then
+# stdin-safe "sourced vs executed" guard (works with `set -u`)
+if [[ "${BASH_SOURCE[0]:-}" == "$0" ]]; then
   main "$@"
 fi
