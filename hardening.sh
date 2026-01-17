@@ -409,13 +409,10 @@ ensure_run_sshd_dir() {
   fi
 }
 
-# ssh.socket can be enabled/active on Ubuntu 24+. If it exists and is enabled/active,
-# the listening port is controlled by the socket unit, not sshd_config.
+# ssh.socket can be used on Ubuntu 24+. If the unit exists, the listening port is controlled by the socket.
+# IMPORTANT: do not rely on is-enabled/is-active here; just check that the unit exists.
 ssh_socket_enabled_or_active() {
-  systemctl list-unit-files ssh.socket >/dev/null 2>&1 || return 1
-  systemctl is-enabled --quiet ssh.socket 2>/dev/null && return 0
-  systemctl is-active --quiet ssh.socket 2>/dev/null && return 0
-  return 1
+  systemctl cat ssh.socket >/dev/null 2>&1
 }
 
 apply_ssh_socket_port_override() {
@@ -476,7 +473,6 @@ configure_sshd() {
   log "Validating sshd_config (sshd -t)..."
   sshd -t
 
-  # If socket activation is used, the port must be changed via ssh.socket override.
   if ssh_socket_enabled_or_active; then
     warn "🇷🇺 Обнаружен ssh.socket (socket activation). Применяю override на порт ${SSH_PORT}."
     warn "🇬🇧 Detected ssh.socket (socket activation). Applying override for port ${SSH_PORT}."
@@ -490,7 +486,6 @@ configure_sshd() {
     die "SSH service is NOT active after restart. Do NOT close your current session."
   fi
 
-  # If ssh.socket is enabled/active, the listener is owned by systemd; otherwise by sshd.
   if ! assert_listening_port "${SSH_PORT}"; then
     warn "SSH does NOT appear to be listening on port ${SSH_PORT}."
     warn "Debug hint: ss -lntp | grep -E ':(22|${SSH_PORT})\\b'"
@@ -597,28 +592,4 @@ main() {
   bootstrap_tui
   tui_init
 
-  # Do NOT start gauge before interactive dialogs (would block whiptail input).
-  interactive_setup
-  confirm_or_exit
-
-  gauge_start
-  gauge_update 0 "Initializing..."
-
-  apt_update_and_upgrade
-  apt_install
-
-  configure_sshd
-  checkpoint_optional_pause
-  configure_ufw
-  configure_fail2ban
-
-  gauge_stop
-
-  step "DONE / ГОТОВО"
-  warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
-  warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
-
-  tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
-}
-
-main "$@"
+  # Do NOT start gauge befo
