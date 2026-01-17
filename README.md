@@ -56,15 +56,6 @@ These decisions are left to the user as **personal / security-sensitive choices*
 
 ---
 
-## 🚀 Usage
-
-### Option A — download & inspect (recommended)
-
-```bash
-curl -O https://raw.githubusercontent.com/<USERNAME>/<REPO>/main/hardening.sh
-chmod +x hardening.sh
-sudo bash hardening.sh
-
 ================================================================================
 
 ---
@@ -126,12 +117,3 @@ sudo bash hardening.sh
   - свежих VPS-инсталляциях
 
 ---
-
-## 🚀 Использование
-
-### Вариант A — скачать и проверить (рекомендуется)
-
-```bash
-curl -O https://raw.githubusercontent.com/<USERNAME>/<REPO>/main/hardening.sh
-chmod +x hardening.sh
-sudo bash hardening.sh
