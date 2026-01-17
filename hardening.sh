@@ -4,15 +4,25 @@ set -euo pipefail
 # ============================================================
 # VPS HARDENING SCRIPT (Ubuntu 24+)
 #
-# RU:
-#  - apt update + safe upgrade
-#  - install & configure: UFW, Fail2Ban
-#  - SSH port selection (supports ssh.socket)
-#  - TUI (whiptail) that works under curl|bash via /dev/tty
-#  - remembers previous ports
-#  - ensure /run/sshd exists before sshd -t
+# 🇷🇺 Назначение:
+#  - Обновление системы (apt update + безопасный upgrade)
+#  - Установка и настройка: UFW, Fail2Ban
+#  - Базовая настройка SSH: выбор порта
+#  - Установка базовых утилит (git, jq, unzip, htop, nano)
+#  - (UX) TUI (whiptail): аккуратные окна + прогресс
+#  - (UX) State: показываем порты из прошлого запуска
+#  - (Fix) /run/sshd перед sshd -t (tmpfs /run)
+#  - (Fix) Поддержка ssh.socket (socket activation) без "мостика" 22
 #
-# EN: see RU above
+# 🇬🇧 Purpose:
+#  - System update (apt update + safe upgrade)
+#  - Install & configure: UFW, Fail2Ban
+#  - Basic SSH setup: choose SSH port
+#  - Install helpful tools (git, jq, unzip, htop, nano)
+#  - (UX) TUI (whiptail): clean dialogs + progress
+#  - (UX) State: show ports from previous run
+#  - (Fix) Ensure /run/sshd exists before sshd -t
+#  - (Fix) ssh.socket support (socket activation) without port-22 bridge
 # ============================================================
 
 # ---------- output helpers ----------
@@ -80,6 +90,9 @@ PANEL_PORT=""
 INBOUND_PORT=""
 
 ENABLE_UFW="yes"
+
+# 🇷🇺 Опциональная пауза перед UFW, чтобы пользователь проверил вход по НОВОМУ SSH порту
+# 🇬🇧 Optional pause before enabling UFW so user can test SSH on the NEW port
 ENABLE_TEST_PAUSE="yes"
 
 # ---------- TUI helpers (whiptail) ----------
@@ -97,8 +110,10 @@ bootstrap_tui() {
 }
 
 has_tui() {
-  command -v whiptail >/dev/null 2>&1 && tty_available
+  command -v whiptail >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
 }
+
+
 
 tui_init() {
   if has_tui; then
@@ -106,128 +121,122 @@ tui_init() {
   fi
 }
 
-# Run whiptail safely under curl|bash:
-# - screen IO to /dev/tty
-# - return value via dedicated FD (when needed)
-_whiptail() {
-  local term="${TERM:-xterm}"
-  TERM="$term" whiptail --clear "$@" </dev/tty >/dev/tty 2>/dev/tty
-}
-
 tui_msg() {
   local title="$1"
   local msg="$2"
-
   if [[ "$TUI_ENABLED" == "true" ]]; then
+    local term="${TERM:-xterm}"
+    local rc=0
     set +e
-    _whiptail --title "$title" --msgbox "$msg" 16 76
-    local rc=$?
+    TERM="$term" whiptail --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    rc=$?
     set -e
-    if [[ "$rc" == "0" ]]; then return 0; fi
-    warn "whiptail msgbox failed (rc=$rc), falling back to text"
+    if [[ "$rc" != "0" ]]; then
+      warn "whiptail msgbox failed (rc=$rc), falling back to text output"
+      TUI_ENABLED="false"
+      echo "$title: $msg" >&2
+    fi
+  else
+    echo "$title: $msg" >&2
   fi
-
-  echo "$title: $msg" >&2
 }
+
 
 tui_info() {
   local title="$1"
   local msg="$2"
-
   if [[ "$TUI_ENABLED" == "true" ]]; then
+    local term="${TERM:-xterm}"
+    local rc=0
     set +e
-    _whiptail --title "$title" --infobox "$msg" 10 76
-    local rc=$?
+    TERM="$term" whiptail --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
+    rc=$?
     set -e
-    if [[ "$rc" == "0" ]]; then return 0; fi
-    warn "whiptail infobox failed (rc=$rc), falling back to text"
+    if [[ "$rc" != "0" ]]; then
+      warn "whiptail infobox failed (rc=$rc), falling back to text output"
+      TUI_ENABLED="false"
+      echo "$title: $msg" >&2
+    fi
+  else
+    echo "$title: $msg" >&2
   fi
-
-  echo "$title: $msg" >&2
 }
+
 
 tui_yesno() {
   local title="$1"
   local msg="$2"
 
+  # Try whiptail first, but NEVER die on whiptail issues under curl|bash.
   if [[ "$TUI_ENABLED" == "true" ]]; then
+    local term="${TERM:-xterm}"
+    local rc=0
+
     set +e
-    _whiptail --title "$title" --yesno "$msg" 16 76
-    local rc=$?
+    TERM="$term" whiptail --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    rc=$?
     set -e
 
-    # 0=yes, 1=no
+    # whiptail returns: 0=yes, 1=no. Anything else = broken environment -> fallback.
     if [[ "$rc" == "0" ]]; then return 0; fi
     if [[ "$rc" == "1" ]]; then return 1; fi
 
-    warn "whiptail yesno failed (rc=$rc), falling back to text prompt"
+    warn "whiptail failed (rc=$rc), falling back to text prompt via /dev/tty"
+    TUI_ENABLED="false"
   fi
 
   tty_yesno_prompt "$msg (y/n) [n]: "
 }
-
-_trim() {
-  # trims leading/trailing whitespace incl CR
-  local s="$1"
-  s="${s//$'\r'/}"
-  # shellcheck disable=SC2001
-  s="$(echo "$s" | sed -e 's/^[[:space:]]\+//' -e 's/[[:space:]]\+$//')"
-  printf "%s" "$s"
-}
-
 tui_input() {
   local title="$1"
   local msg="$2"
   local default="$3"
   local out=""
+  local rc=0
 
   if [[ "$TUI_ENABLED" == "true" ]]; then
-    # We need: screen IO -> /dev/tty, value -> stdout of THIS function (clean)
-    # Use fd 3 for capturing output, while whiptail screen stays on /dev/tty
+    local term="${TERM:-xterm}"
+
     set +e
+    # Capture inputbox result reliably under `curl|bash`:
+    # - UI goes to /dev/tty
+    # - value is captured via --output-fd 3 (not fragile FD swapping)
     out="$(
-      local term="${TERM:-xterm}"
       TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
-        --output-fd 3 </dev/tty >/dev/tty 2>/dev/tty 3>&1
+        --output-fd 3 \
+        </dev/tty 1>/dev/tty 2>/dev/tty 3>&1
     )"
-    local rc=$?
+    rc=$?
     set -e
 
+    # rc: 0=OK, 1=Cancel, else=broken env
     if [[ "$rc" == "0" ]]; then
-      out="$(_trim "$out")"
-      if [[ -n "$out" ]]; then
-        echo "$out"
-        return 0
-      fi
-      # empty input should not silently pass as "invalid port"
-      return 2
-    fi
-
-    # Cancel -> treat as empty (caller decides)
-    if [[ "$rc" == "1" ]]; then
+      out="${out//$''/}"
+      out="$(printf '%s' "$out" | xargs)"
+      echo "$out"
+      return 0
+    elif [[ "$rc" == "1" ]]; then
       return 1
     fi
 
-    warn "whiptail inputbox failed (rc=$rc), falling back to text prompt"
+    warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
+    TUI_ENABLED="false"
   fi
 
   out="$(tty_readline "$msg [$default]: " "$default")"
-  out="$(_trim "$out")"
-  if [[ -n "$out" ]]; then
-    echo "$out"
-    return 0
-  fi
-  return 2
+  out="${out//$''/}"
+  out="$(printf '%s' "$out" | xargs)"
+  echo "$out"
 }
-
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
+
+  local term="${TERM:-xterm}"
 
   GAUGE_PATH="/tmp/vps-hardening-gauge.$$"
   mkfifo "$GAUGE_PATH"
 
   set +e
-  local term="${TERM:-xterm}"
   TERM="$term" whiptail --clear --title "VPS Hardening" --gauge "Starting..." 10 76 0 \
     <"$GAUGE_PATH" >/dev/tty 2>/dev/tty &
   set -e
@@ -235,6 +244,7 @@ gauge_start() {
   GAUGE_PID="$!"
   exec {GAUGE_FD}>"$GAUGE_PATH"
 }
+
 
 gauge_update() {
   local pct="$1"
@@ -269,35 +279,30 @@ port_is_duplicate() {
   done
   return 1
 }
-
 ask_port_loop() {
   local title="$1"
   local prompt="$2"
   local default="$3"
   local val=""
-  while true; do
-    set +e
-    val="$(tui_input "$title" "$prompt" "$default")"
-    local rc=$?
-    set -e
 
-    if [[ "$rc" == "1" ]]; then
-      # Cancel
-      return 1
-    fi
-    if [[ "$rc" == "2" ]]; then
+  while true; do
+    val="$(tui_input "$title" "$prompt" "$default")" || true
+    val="${val//$''/}"
+    val="$(printf '%s' "$val" | xargs)"
+
+    if [[ -z "$val" ]]; then
       tui_msg "$title" "Empty input. Please enter a port number (1..65535)."
       continue
     fi
 
-    val="$(_trim "$val")"
     if is_valid_port "$val"; then
-      echo "$val"; return 0
+      echo "$val"
+      return 0
     fi
-    tui_msg "$title" "Invalid port: '$val'. Please enter 1..65535."
+
+    tui_msg "$title" "Invalid port: $val. Please enter 1..65535."
   done
 }
-
 ask_unique_port_loop() {
   local title="$1"
   local prompt="$2"
@@ -421,16 +426,21 @@ SSH: ${SSH_PORT}
 Panel: ${panel_txt}
 Inbound: ${inbound_txt}
 
+\
 🇷🇺 Важно: скрипт НЕ управляет SSH ключами и НЕ отключает root/password.
 
+\
 🇬🇧 Selected ports:
 SSH: ${SSH_PORT}
 Panel: ${panel_txt}
 Inbound: ${inbound_txt}
 
-🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password.")"
+\
+🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password.
+")"
 
-  if ! tui_yesno "Confirm" "${msg}\n\nProceed / Продолжить?"; then
+  if ! tui_yesno "Confirm" "${msg}
+Proceed / Продолжить?"; then
     die "Aborted by user."
   fi
 }
@@ -490,7 +500,9 @@ ensure_run_sshd_dir() {
   fi
 }
 
-ssh_socket_exists() {
+# ssh.socket can be used on Ubuntu 24+. If the unit exists, the listening port is controlled by the socket.
+# IMPORTANT: do not rely on is-enabled/is-active here; just check that the unit exists.
+ssh_socket_enabled_or_active() {
   systemctl cat ssh.socket >/dev/null 2>&1
 }
 
@@ -542,6 +554,7 @@ configure_sshd() {
   log "Setting SSH Port = ${SSH_PORT}"
   set_sshd_kv "Port" "${SSH_PORT}"
 
+  # Bootstrap-friendly (do not disable root/password auth)
   set_sshd_kv "PermitEmptyPasswords" "no"
   set_sshd_kv "ChallengeResponseAuthentication" "no"
   set_sshd_kv "UsePAM" "yes"
@@ -551,7 +564,7 @@ configure_sshd() {
   log "Validating sshd_config (sshd -t)..."
   sshd -t
 
-  if ssh_socket_exists; then
+  if ssh_socket_enabled_or_active; then
     warn "🇷🇺 Обнаружен ssh.socket (socket activation). Применяю override на порт ${SSH_PORT}."
     warn "🇬🇧 Detected ssh.socket (socket activation). Applying override for port ${SSH_PORT}."
     apply_ssh_socket_port_override "${SSH_PORT}"
@@ -568,7 +581,7 @@ configure_sshd() {
     warn "SSH does NOT appear to be listening on port ${SSH_PORT}."
     warn "Debug hint: ss -lntp | grep -E ':(22|${SSH_PORT})\\b'"
     warn "Debug hint: systemctl status ssh.socket (if enabled)"
-    if ssh_socket_exists; then
+    if ssh_socket_enabled_or_active; then
       warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
       rollback_ssh_socket_override_to_22
     fi
@@ -583,7 +596,7 @@ checkpoint_optional_pause() {
   [[ "$ENABLE_TEST_PAUSE" == "yes" && "$SSH_PORT" != "22" ]] || return 0
 
   tui_msg "Checkpoint" \
-"🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.
+    "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.
 Если вход НЕ работает — нажми Cancel и НЕ продолжай.
 
 🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.
@@ -650,7 +663,6 @@ configure_fail2ban() {
 [sshd]
 enabled = true
 port = ${SSH_PORT}
-backend = systemd
 bantime = 1h
 findtime = 10m
 maxretry = 5
@@ -671,6 +683,7 @@ main() {
   tui_init
 
   # Do NOT start gauge before interactive dialogs (would block whiptail input).
+
   interactive_setup
   confirm_or_exit
 
@@ -693,5 +706,6 @@ main() {
 
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
-
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi
