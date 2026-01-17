@@ -38,6 +38,42 @@ require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
 
+# ---------- tty helpers (curl | bash safe input) ----------
+# When running via: curl ... | bash
+# stdin is the script stream (NOT a terminal), so read prompts must use /dev/tty.
+tty_require() {
+  [[ -r /dev/tty ]] || die "No TTY available for interactive input. Run in a real terminal (SSH session)."
+}
+
+tty_read() {
+  local prompt="$1"
+  local default="${2:-}"
+  local out=""
+
+  if [[ -t 0 ]]; then
+    read -r -p "$prompt" out
+  else
+    tty_require
+    read -r -p "$prompt" out </dev/tty
+  fi
+
+  echo "${out:-$default}"
+}
+
+tty_yesno() {
+  local prompt="$1"
+  local ans=""
+
+  if [[ -t 0 ]]; then
+    read -r -p "$prompt" ans
+  else
+    tty_require
+    read -r -p "$prompt" ans </dev/tty
+  fi
+
+  [[ "${ans:-n}" =~ ^[yY]$ ]]
+}
+
 # ---------- state ----------
 STATE_DIR="/etc/vps-hardening"
 STATE_FILE="${STATE_DIR}/last-ports.conf"
@@ -100,9 +136,7 @@ tui_yesno() {
     whiptail --title "$title" --yesno "$msg" 16 76
     return $?
   else
-    local ans
-    read -r -p "$msg (y/n) [n]: " ans
-    [[ "${ans:-n}" =~ ^[yY]$ ]]
+    tty_yesno "$msg (y/n) [n]: "
   fi
 }
 
@@ -115,8 +149,8 @@ tui_input() {
     out="$(whiptail --title "$title" --inputbox "$msg" 10 76 "$default" 3>&1 1>&2 2>&3)" || return 1
     echo "$out"
   else
-    read -r -p "$msg [$default]: " out
-    echo "${out:-$default}"
+    out="$(tty_read "$msg [$default]: " "$default")"
+    echo "$out"
   fi
 }
 
@@ -310,7 +344,7 @@ confirm_or_exit() {
     fi
   else
     local ans=""
-    read -r -p "Proceed / Продолжить? (y/n) [n]: " ans
+    ans="$(tty_read "Proceed / Продолжить? (y/n) [n]: " "n")"
     [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user."
   fi
 }
@@ -459,7 +493,7 @@ checkpoint_optional_pause() {
       || die "Aborted by user (SSH test checkpoint)."
   else
     local ans=""
-    read -r -p "Proceed to enable UFW now? (y/n) [n]: " ans
+    ans="$(tty_read "Proceed to enable UFW now? (y/n) [n]: " "n")"
     [[ "${ans:-n}" =~ ^[yY]$ ]] || die "Aborted by user (SSH test checkpoint)."
   fi
 }
