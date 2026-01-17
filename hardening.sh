@@ -592,9 +592,8 @@ main() {
   bootstrap_tui
   tui_init
 
-  # Do NOT start gauge befo
-cat >> /root/hardening.sh <<'EOF'
-re interactive dialogs (would block whiptail input).
+  # Do NOT start gauge before interactive dialogs (would block whiptail input).
+
   interactive_setup
   confirm_or_exit
 
@@ -619,4 +618,3 @@ re interactive dialogs (would block whiptail input).
 }
 
 main "$@"
-EOF
