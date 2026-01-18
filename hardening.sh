@@ -152,6 +152,21 @@ console_init() {
 
   # Redirect all stdout/stderr to logfile
   exec >>"$LOG_FILE" 2>&1
+
+  # --- safety: never silence stdout/stderr ---
+  # When running via curl/pipe, accidental bare exec or empty-FD redirections can close output.
+  if tty_available; then
+    # keep console output visible
+    exec >/dev/tty 2>/dev/tty || true
+  fi
+
+  # Only use CONSOLE_FD redirections if CONSOLE_FD is a valid integer fd
+  if [[ -n "${CONSOLE_FD:-}" && "${CONSOLE_FD}" =~ ^[0-9]+$ ]]; then
+    : # CONSOLE_FD is valid
+  else
+    CONSOLE_FD=""
+  fi
+
 }
 
 say() { printf '%s\n' "$*" >&"$CONSOLE_FD"; }
