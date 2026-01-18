@@ -382,27 +382,50 @@ gauge_start() {
 
 
 gauge_update() {
-  local pct="$1"
-  local msg="$2"
+  local pct="${1:-0}"
+  local msg="${2:-}"
+
   GAUGE_LAST_PCT="$pct"
   GAUGE_LAST_MSG="$msg"
-  [[ "$TUI_ENABLED" == "true" ]] || return 0
+
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
+
+  # If gauge is not running / FD isn't valid, do nothing (no stray output)
+  [[ -n "${GAUGE_FD:-}" ]] || return 0
+
+  # Validate FD (avoid "Bad file descriptor" / "ambiguous redirect")
+  { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
+
   {
     echo "XXX"
     echo "$pct"
     echo "$msg"
     echo "XXX"
-  } >&"$GAUGE_FD"
+  } >&"$GAUGE_FD" 2>/dev/null || true
 }
 
+
 gauge_stop() {
-  [[ "$TUI_ENABLED" == "true" ]] || return 0
-  gauge_update 100 "Done."
-  exec {GAUGE_FD}>&-
-  # IMPORTANT: wait for whiptail to fully exit BEFORE removing FIFO
-  wait "$GAUGE_PID" 2>/dev/null || true
-  rm -f "$GAUGE_PATH" || true
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
+
+  # Try to finalize nicely, but never break on missing FD/PID
+  gauge_update 100 "Done." || true
+
+  if [[ -n "${GAUGE_FD:-}" ]]; then
+    exec {GAUGE_FD}>&- 2>/dev/null || true
+  fi
+
+  if [[ -n "${GAUGE_PID:-}" ]]; then
+    wait "$GAUGE_PID" 2>/dev/null || true
+  fi
+
+  rm -f "${GAUGE_PATH:-}" 2>/dev/null || true
+
+  GAUGE_FD=""
+  GAUGE_PID=""
+  GAUGE_PATH=""
 }
+
 
 gauge_pause_for_dialog() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
