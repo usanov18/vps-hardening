@@ -496,7 +496,20 @@ interactive_setup() {
 
   if [[ "$SSH_PORT" != "22" ]]; then
     if tui_yesno "Safety pause" \
-      "Pause before enabling UFW to test SSH on the NEW port?\n\n🇷🇺 Пауза перед включением UFW, чтобы проверить вход по НОВОМУ SSH порту?\n\nDefault: Yes"; then
+      "Pause BEFORE enabling UFW so you can test SSH on the NEW port.
+
+✅ Open a SECOND terminal/session NOW and try:
+  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
+
+🇷🇺 Пауза ПЕРЕД включением UFW, чтобы проверить вход по НОВОМУ SSH порту.
+
+✅ Открой ВТОРОЕ окно/сессию и выполни:
+  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
+
+If login FAILS: choose No here OR press Cancel at the checkpoint.
+If you choose No: the script will continue WITHOUT waiting (and will NOT remove Port 22 automatically).
+
+Default: Yes"; then
       ENABLE_TEST_PAUSE="yes"
     else
       ENABLE_TEST_PAUSE="no"
@@ -745,16 +758,20 @@ checkpoint_optional_pause() {
     ufw_temp_allow_port "${SSH_PORT}"
   fi
   tui_msg "Checkpoint" \
-    "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.
-Если вход НЕ работает — нажми Cancel и НЕ продолжай.
+    "🇷🇺 СЕЙЧАС проверь вход по SSH на новом порту ${SSH_PORT}.
 
-🇬🇧 Please test SSH login on the new port ${SSH_PORT} in a separate window.
-If it does NOT work — press Cancel and do NOT continue."
+1) НЕ закрывай эту сессию.
+2) Открой ВТОРОЕ окно/терминал и выполни:
+   ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
+3) Если вход НЕ работает — нажми Cancel и НЕ продолжай.
 
-  if [[ "$SSH_PORT" != "22" ]]; then
-    sed -i -E '/^\s*Port\s+22\s*$/d' /etc/ssh/sshd_config
-    systemctl restart ssh
-  fi
+🇬🇧 NOW test SSH login on the new port ${SSH_PORT}.
+
+1) Do NOT close this session.
+2) Open a SECOND terminal and run:
+   ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
+3) If login does NOT work — press Cancel and do NOT continue."
+
 
   if ! tui_yesno "Proceed?" "Proceed to enable UFW now? / Продолжить и включить UFW?"; then
     die "Aborted by user (SSH test checkpoint)."
@@ -762,6 +779,35 @@ If it does NOT work — press Cancel and do NOT continue."
 
   SSH_TEST_CONFIRMED="yes"
 }
+
+finalize_legacy_ssh_port_22_if_confirmed() {
+  local cfg="/etc/ssh/sshd_config"
+  local backup=""
+
+  [[ "${SSH_TEST_CONFIRMED:-no}" == "yes" ]] || return 0
+  [[ "${SSH_PORT}" != "22" ]] || return 0
+
+  grep -qE '^\s*Port\s+22\s*$' "$cfg" 2>/dev/null || return 0
+
+  warn "🇷🇺 Вход по новому SSH порту ${SSH_PORT} подтверждён. Удаляю Port 22 из sshd_config."
+  warn "🇬🇧 New SSH port ${SSH_PORT} confirmed. Removing Port 22 from sshd_config."
+
+  backup="${cfg}.bak.$(date +%Y%m%d_%H%M%S)"
+  cp -a "$cfg" "$backup"
+
+  sed -i -E '/^\s*Port\s+22\s*$/d' "$cfg"
+
+  if sshd -t; then
+    systemctl reload ssh 2>/dev/null || systemctl restart ssh
+    log "Legacy Port 22 removed from sshd_config."
+  else
+    warn "sshd -t failed after removing Port 22. Restoring backup: $backup"
+    cp -a "$backup" "$cfg"
+    systemctl reload ssh 2>/dev/null || systemctl restart ssh
+    return 1
+  fi
+}
+
 
 # ---------- firewall ----------
 
@@ -818,15 +864,7 @@ configure_ufw() {
   ufw --force enable
   ufw status verbose
 
-
-  # After firewall is enabled with the NEW SSH port allowed, optionally drop legacy port 22 from sshd_config.
-  if [[ "${SSH_TEST_CONFIRMED:-no}" == "yes" && "${SSH_PORT}" != "22" ]]; then
-    if grep -qE '^\s*Port\s+22\s*$' /etc/ssh/sshd_config 2>/dev/null; then
-      warn "Removing legacy SSH Port 22 from sshd_config (confirmed new port works)..."
-      sed -i -E '/^\s*Port\s+22\s*$/d' /etc/ssh/sshd_config
-      systemctl restart ssh || true
-    fi
-  fi
+  finalize_legacy_ssh_port_22_if_confirmed
 }
 
 # ---------- fail2ban ----------
