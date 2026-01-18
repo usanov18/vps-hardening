@@ -1,6 +1,9 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+
+TTY_DEV="/dev/tty"
+
 # ============================================================
 # VPS HARDENING SCRIPT (Ubuntu 24+)
 #
