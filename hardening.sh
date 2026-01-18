@@ -41,8 +41,17 @@ cleanup_all() {
   tput cnorm 2>/dev/null || true
   # ensure shell prompt starts on a clean line after gauge
   printf "
-" 2>/dev/null || true
+" 2>/dev/null || true  # --- hard TUI/TTY restore ---
+  gauge_stop 2>/dev/null || true
+  # Exit whiptail/alternate screen if enabled
+  tput rmcup 2>/dev/null || true
+  stty sane 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  whiptail --clear 2>/dev/null || true
+  printf "\n" 2>/dev/null || true
 }
+
 tui_cleanup() {
   # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
@@ -56,7 +65,9 @@ step() { echo; echo "========== $* =========="; }
 die()  { cleanup_all || true; echo "ERROR: $*" >&2; exit 1; }
 CURRENT_STEP="(starting)"
 trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
-trap 'cleanup_all || true' EXIT
+trap 'rc=$?; cleanup_all || true; if [[ $rc -eq 0 ]]; then printf "
+==> DONE / ГОТОВО
+"; fi' EXIT
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
