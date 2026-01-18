@@ -542,6 +542,7 @@ interactive_setup() {
         if port_tcp_listener_is_sshd "$SSH_PORT"; then
           tui_msg "SSH Port" \
             "🇷🇺 Порт ${SSH_PORT} уже используется SSH (sshd).\nЭто нормально при повторном запуске.\n\nПродолжаем с этим портом.\n\n🇬🇧 Port ${SSH_PORT} is already used by SSH (sshd).\nThis is normal on re-runs.\n\nContinuing with this port."
+        SSH_PORT_REUSED="yes"
           break
         fi
 
@@ -560,8 +561,10 @@ interactive_setup() {
     warn "🇷🇺 Не закрывай текущую SSH-сессию и проверь вход по новому порту в отдельном окне."
     warn "🇬🇧 You selected SSH port ${SSH_PORT}. Port 22 will be blocked by firewall once UFW is enabled."
     warn "🇬🇧 Keep your current SSH session open and test login on the new port in a separate window."
+    if [[ "${SSH_PORT_REUSED:-no}" != "yes" ]]; then
     tui_msg "SSH Warning" \
       "🇷🇺 SSH порт: ${SSH_PORT}\nНе закрывай текущую сессию.\nПроверь вход по новому порту в отдельном окне.\n\n🇬🇧 SSH port: ${SSH_PORT}\nKeep current session open.\nTest login on new port in a separate window."
+    fi
   fi
 
   local panel_default="${PANEL_PORT_DEFAULT}"
@@ -1016,7 +1019,8 @@ main() {
   gauge_stop
 
   finalize_tui
-  step "DONE / ГОТОВО"
+  finalize_tui
+step "DONE / ГОТОВО"
 echo "==> DONE / ГОТОВО"
   warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
   warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
