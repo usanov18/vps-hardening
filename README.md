@@ -1,6 +1,25 @@
 # VPS Hardening Script (Ubuntu 24+)
 
 Interactive bootstrap & hardening script for a fresh VPS.  
+
+## 🚀 Quick start
+
+Run on a fresh Ubuntu VPS (recommended: review before running):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh | bash
+```
+
+Safer (download first):
+
+```bash
+curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
+chmod +x hardening.sh
+./hardening.sh
+```
+
+> Tip: run as root or via sudo. The script is interactive (whiptail).
+
 Designed for **clarity, safety, and repeatability**, with a focus on DevOps best practices.
 
 ---
