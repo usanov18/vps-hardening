@@ -8,6 +8,22 @@ finalize_tui() { :; }
 
 TTY_DEV="/dev/tty"
 
+
+# graceful Ctrl+C handling (keeps TUI clean)
+INTERRUPTED="no"
+on_int() {
+  INTERRUPTED="yes"
+  # best-effort restore (do NOT assume gauge exists)
+  gauge_stop 2>/dev/null || true
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+  tput rmcup 2>/dev/null || true
+  printf "\n[INTERRUPTED] Stopped by user (Ctrl+C)\n" >&2
+  exit 130
+}
+trap 'on_int' INT
+
 # ============================================================
 # VPS HARDENING SCRIPT (Ubuntu 24+)
 #
@@ -90,7 +106,7 @@ step() { echo; echo "========== $* =========="; }
 die()  { cleanup_all || true; echo "ERROR: $*" >&2; exit 1; }
 CURRENT_STEP="(starting)"
 trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
-trap 'rc=$?; cleanup_all || true; if [[ $rc -eq 0 ]]; then printf "
+trap 'rc=$?; cleanup_all || true; if [[ $rc -eq 0 && "${INTERRUPTED:-no}" != "yes" ]]; then printf "
 ==> DONE / ГОТОВО
 "; fi' EXIT
 require_root() {
@@ -161,11 +177,7 @@ console_init() {
   exec >>"$LOG_FILE" 2>&1
 
   # --- safety: never silence stdout/stderr ---
-  # When running via curl/pipe, accidental bare exec or empty-FD redirections can close output.
-  if tty_available; then
-    # keep console output visible
-    exec >/dev/tty 2>/dev/tty || true
-  fi
+  # Keep console output sane without forcing logs to /dev/tty.
 
   # Only use CONSOLE_FD redirections if CONSOLE_FD is a valid integer fd
   if [[ -n "${CONSOLE_FD:-}" && "${CONSOLE_FD}" =~ ^[0-9]+$ ]]; then
