@@ -26,6 +26,19 @@ set -euo pipefail
 # ============================================================
 
 # ---------- output helpers ----------
+tui_cleanup() {
+  # Best-effort terminal restore after whiptail / gauge / abrupt exits
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  clear 2>/dev/null || true
+}
+
+cleanup_all() {
+  # stop gauge if running, then restore tty
+  gauge_stop 2>/dev/null || true
+  tui_cleanup 2>/dev/null || true
+}
+
 
 tui_cleanup() {
   # Best-effort terminal restore after whiptail / gauge / abrupt exits
@@ -37,10 +50,10 @@ tui_cleanup() {
 log()  { echo "[$(date -Is)] $*"; }
 warn() { echo "[$(date -Is)] [WARNING] $*" >&2; }
 step() { echo; echo "========== $* =========="; }
-die()  { tui_cleanup || true; echo "ERROR: $*" >&2; exit 1; }
+die()  { cleanup_all || true; echo "ERROR: $*" >&2; exit 1; }
 CURRENT_STEP="(starting)"
 trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
-trap 'tui_cleanup || true' EXIT
+trap 'cleanup_all || true' EXIT
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
@@ -176,6 +189,7 @@ tui_init() {
 }
 
 tui_msg() {
+  gauge_pause_for_dialog || true
   local title="$1"
   local msg="$2"
   if [[ "$TUI_ENABLED" == "true" ]]; then
@@ -193,9 +207,8 @@ tui_msg() {
   else
     echo "$title: $msg" >&2
   fi
+  gauge_resume_after_dialog || true
 }
-
-
 tui_info() {
   local title="$1"
   local msg="$2"
@@ -218,6 +231,7 @@ tui_info() {
 
 
 tui_yesno() {
+  gauge_pause_for_dialog || true
   local title="$1"
   local msg="$2"
 
@@ -240,8 +254,10 @@ tui_yesno() {
   fi
 
   tty_yesno_prompt "$msg (y/n) [n]: "
+  gauge_resume_after_dialog || true
 }
 tui_input() {
+  gauge_pause_for_dialog || true
   local title="$1"
   local msg="$2"
   local default="$3"
@@ -273,13 +289,15 @@ tui_input() {
         out="$(printf '%s' "$out" | xargs)"
         printf '%s
 ' "$out"
-        return 0
+  gauge_resume_after_dialog || true
+  return 0
       fi
 
       rm -f "$tmp" 2>/dev/null || true
 
       if [[ "$rc" == "1" ]]; then
-        return 1
+  gauge_resume_after_dialog || true
+  return 1
       fi
 
       warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
@@ -293,6 +311,7 @@ tui_input() {
   out="$(printf '%s' "$out" | xargs)"
   printf '%s
 ' "$out"
+  gauge_resume_after_dialog || true
 }
 gauge_start() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
@@ -440,7 +459,9 @@ ask_unique_port_loop() {
   while true; do
     val="$(ask_port_loop "$title" "$prompt" "$default")" || return 1
     if port_is_duplicate "$val" "${existing[@]}"; then
-      tui_msg "$title" "🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.\n\n🇬🇧 This port is already used by another selection. Choose a different one."
+      tui_msg "$title" "🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.\n\n🇬🇧 🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.
+
+🇬🇧 This port is already used by another selection. Choose a different one."
       continue
     fi
     echo "$val"; return 0
@@ -496,7 +517,12 @@ interactive_setup() {
     if tcp_port_is_listening "$SSH_PORT"; then
       local listeners
       listeners="$(get_tcp_listeners_for_port "$SSH_PORT" | head -n 6)"
-      if tui_yesno "SSH Port in use" "Port ${SSH_PORT} already has a TCP listener. Using it for SSH will likely FAIL.\n\nDetected:\n${listeners}\n\nChoose a different SSH port?"; then
+      if tui_yesno "SSH Port in use" "Port ${SSH_PORT} is already LISTENing.
+
+🇷🇺 Если это SSH (sshd) — это нормально при повторном запуске.
+🇬🇧 If this is SSH (sshd) — it's normal on re-runs.
+
+Using it for SSH may FAIL.\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
         continue
       fi
     fi
