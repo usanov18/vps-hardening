@@ -381,8 +381,9 @@ gauge_stop() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
   gauge_update 100 "Done."
   exec {GAUGE_FD}>&-
-  rm -f "$GAUGE_PATH" || true
+  # IMPORTANT: wait for whiptail to fully exit BEFORE removing FIFO
   wait "$GAUGE_PID" 2>/dev/null || true
+  rm -f "$GAUGE_PATH" || true
 }
 
 gauge_pause_for_dialog() {
