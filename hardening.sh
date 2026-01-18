@@ -76,6 +76,48 @@ tty_yesno_prompt() {
   [[ "${ans:-n}" =~ ^[yY]$ ]]
 }
 
+
+# ---------- logging / UX: keep terminal clean, write heavy output to logfile ----------
+LOG_DIR="/var/log/vps-hardening"
+LOG_FILE=""
+CONSOLE_FD=""
+
+console_init() {
+  mkdir -p "$LOG_DIR"
+  chmod 750 "$LOG_DIR" || true
+
+  LOG_FILE="${LOG_DIR}/run-$(date +%Y%m%d-%H%M%S).log"
+  touch "$LOG_FILE"
+  chmod 600 "$LOG_FILE" || true
+
+  # Preserve original stderr for user-visible output
+  exec {CONSOLE_FD}>&2
+
+  # Prefer real TTY if available
+  if tty_available; then
+    exec {CONSOLE_FD}>/dev/tty
+  fi
+
+  # Redirect all stdout/stderr to logfile
+  exec >>"$LOG_FILE" 2>&1
+}
+
+say() { printf '%s\n' "$*" >&"$CONSOLE_FD"; }
+
+die() {
+  say "ERROR: $*"
+  say "Log: ${LOG_FILE:-/var/log/vps-hardening/...}"
+  echo "ERROR: $*" >&2
+  exit 1
+}
+
+step() {
+  echo
+  echo "========== $* =========="
+  say "==> $*"
+}
+
+
 # ---------- state ----------
 STATE_DIR="/etc/vps-hardening"
 STATE_FILE="${STATE_DIR}/last-ports.conf"
@@ -738,6 +780,7 @@ EOF
 
 main() {
   require_root
+  console_init
   bootstrap_tui
   tui_init
 
