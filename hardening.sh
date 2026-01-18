@@ -530,25 +530,31 @@ interactive_setup() {
 
   # SSH port: if it's already in use by another TCP listener, choosing it will likely fail
   # (sshd won't be able to bind). Catch this early to avoid frustrating mid-script failures.
-  while true; do
-    SSH_PORT="$(ask_port_loop "SSH Port" "SSH port / Порт SSH (1-65535):" "$ssh_default")"
-    if [[ "$SSH_PORT" == "22" ]]; then
-      break
-    fi
-    if tcp_port_is_listening "$SSH_PORT"; then
-      local listeners
-      listeners="$(get_tcp_listeners_for_port "$SSH_PORT" | head -n 6)"
-      if tui_yesno "SSH Port in use" "Port ${SSH_PORT} is already LISTENing.
-
-🇷🇺 Если это SSH (sshd) — это нормально при повторном запуске.
-🇬🇧 If this is SSH (sshd) — it's normal on re-runs.
-
-Using it for SSH may FAIL (unless it's sshd on a re-run).\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
-        continue
+    while true; do
+      SSH_PORT="$(ask_port_loop "SSH Port" "SSH port / Порт SSH (1-65535):" "$ssh_default")"
+      if [[ "$SSH_PORT" == "22" ]]; then
+        break
       fi
-    fi
-    break
-  done
+      if tcp_port_is_listening "$SSH_PORT"; then
+        local listeners
+        listeners="$(get_tcp_listeners_for_port "$SSH_PORT" | head -n 6)"
+
+        # SSH re-run: sshd already listening — OK
+        if port_tcp_listener_is_sshd "$SSH_PORT"; then
+          tui_msg "SSH Port" \
+            "🇷🇺 Порт ${SSH_PORT} уже используется SSH (sshd).\nЭто нормально при повторном запуске.\n\nПродолжаем с этим портом.\n\n🇬🇧 Port ${SSH_PORT} is already used by SSH (sshd).\nThis is normal on re-runs.\n\nContinuing with this port."
+          break
+        fi
+
+        if tui_yesno "SSH Port in use" \
+          "Port ${SSH_PORT} is already LISTENing.\n\n🇷🇺 Порт занят другим процессом. Рекомендуется выбрать другой.\n🇬🇧 Port is used by another process. Recommended to choose a different one.\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
+          continue
+        else
+          die "Aborted by user due to busy SSH port ${SSH_PORT}."
+        fi
+      fi
+      break
+    done
 
   if [[ "$SSH_PORT" != "22" ]]; then
     warn "🇷🇺 Ты выбрал SSH порт ${SSH_PORT}. Порт 22 будет закрыт firewall'ом после включения UFW."
@@ -1010,6 +1016,7 @@ main() {
 
   gauge_stop
 
+  finalize_tui
   step "DONE / ГОТОВО"
   warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
   warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
@@ -1027,3 +1034,14 @@ else
   main "$@"
 fi
 
+
+finalize_tui() {
+  # hard TUI restore
+  gauge_stop 2>/dev/null || true
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+  whiptail --clear 2>/dev/null || true
+  clear 2>/dev/null || true
+  printf "\n" 2>/dev/null || true
+}
