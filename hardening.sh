@@ -328,6 +328,17 @@ is_valid_port() {
   [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
 }
 
+# Returns TCP LISTEN lines for a given port (best-effort; may be empty).
+get_tcp_listeners_for_port() {
+  local port="$1"
+  ss -lntpH 2>/dev/null | awk -v p=":${port}" '$1=="LISTEN" && $4 ~ (p"$") {print}' || true
+}
+
+tcp_port_is_listening() {
+  local port="$1"
+  get_tcp_listeners_for_port "$port" | grep -q '.'
+}
+
 port_is_duplicate() {
   local candidate="$1"; shift
   local p
@@ -423,7 +434,22 @@ interactive_setup() {
 
   tui_info "Setup" "🇷🇺 Выбери порты, которые будут ОТКРЫТЫ в UFW.\n🇬🇧 Choose ports to be ALLOWED in UFW."
 
-  SSH_PORT="$(ask_port_loop "SSH Port" "SSH port / Порт SSH (1-65535):" "$ssh_default")"
+  # SSH port: if it's already in use by another TCP listener, choosing it will likely fail
+  # (sshd won't be able to bind). Catch this early to avoid frustrating mid-script failures.
+  while true; do
+    SSH_PORT="$(ask_port_loop "SSH Port" "SSH port / Порт SSH (1-65535):" "$ssh_default")"
+    if [[ "$SSH_PORT" == "22" ]]; then
+      break
+    fi
+    if tcp_port_is_listening "$SSH_PORT"; then
+      local listeners
+      listeners="$(get_tcp_listeners_for_port "$SSH_PORT" | head -n 6)"
+      if tui_yesno "SSH Port in use" "Port ${SSH_PORT} already has a TCP listener. Using it for SSH will likely FAIL.\n\nDetected:\n${listeners}\n\nChoose a different SSH port?"; then
+        continue
+      fi
+    fi
+    break
+  done
 
   if [[ "$SSH_PORT" != "22" ]]; then
     warn "🇷🇺 Ты выбрал SSH порт ${SSH_PORT}. Порт 22 будет закрыт firewall'ом после включения UFW."
@@ -442,12 +468,28 @@ interactive_setup() {
 
   if tui_yesno "Panel Port" "Open panel port? / Открыть порт панели?"; then
     PANEL_PORT="$(ask_unique_port_loop "Panel Port" "Panel port / Порт панели (1-65535):" "$panel_default" "$SSH_PORT")"
+
+    # Panel port may legitimately already be listening (e.g., existing admin UI).
+    # This is NOT an error: the firewall rule will be added later.
+    if [[ -n "$PANEL_PORT" ]] && tcp_port_is_listening "$PANEL_PORT"; then
+      local listeners
+      listeners="$(get_tcp_listeners_for_port "$PANEL_PORT" | head -n 6)"
+      tui_msg "Panel Port" "Note: port ${PANEL_PORT} is already listening (TCP). This is OK if intentional; UFW will allow it later.\n\nDetected:\n${listeners}"
+    fi
   else
     PANEL_PORT=""
   fi
 
   if tui_yesno "Inbound Port" "Open inbound port? / Открыть inbound порт?"; then
     INBOUND_PORT="$(ask_unique_port_loop "Inbound Port" "Inbound port / Inbound порт (1-65535):" "$inbound_default" "$SSH_PORT" "$PANEL_PORT")"
+
+    # Same logic: inbound port might already be listening (e.g., existing service).
+    # That's fine — we'll add firewall rules later.
+    if [[ -n "$INBOUND_PORT" ]] && tcp_port_is_listening "$INBOUND_PORT"; then
+      local listeners
+      listeners="$(get_tcp_listeners_for_port "$INBOUND_PORT" | head -n 6)"
+      tui_msg "Inbound Port" "Note: port ${INBOUND_PORT} is already listening (TCP). This is OK if intentional; UFW will allow it later.\n\nDetected:\n${listeners}"
+    fi
   else
     INBOUND_PORT=""
   fi
