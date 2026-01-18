@@ -456,7 +456,7 @@ gauge_resume_after_dialog() {
   [[ -p "${GAUGE_PATH}" ]] || return 0
 
   # Re-open FIFO writer end; if gauge already gone, stay silent.
-  exec {GAUGE_FD}>"$GAUGE_PATH" 2>/dev/null || { GAUGE_FD=""; return 0; }
+  exec {GAUGE_FD}<>"${GAUGE_PATH}" 2>/dev/null || { GAUGE_FD=""; return 0; }
 
   # Restore last gauge state (best-effort)
   gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-}" || true
