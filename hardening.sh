@@ -393,7 +393,7 @@ gauge_start() {
   set -e
 
   GAUGE_PID="$!"
-  exec {GAUGE_FD}>"$GAUGE_PATH"
+  exec {GAUGE_FD}<>"$GAUGE_PATH"
 }
 
 
