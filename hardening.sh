@@ -27,7 +27,7 @@ set -euo pipefail
 
 # ---------- output helpers ----------
 tui_cleanup() {
-  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
+  # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
   : # no clear here
@@ -39,8 +39,6 @@ cleanup_all() {
 
   # Leave whiptail/alternate screen if it was used
   tput rmcup 2>/dev/null || true
-  stty sane <"$TTY_DEV" 2>/dev/null || true
-  tput cnorm <"$TTY_DEV" 2>/dev/null || true
 
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
@@ -71,7 +69,7 @@ on_exit() {
 
 
 tui_cleanup() {
-  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
+  # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
   : # no clear here
@@ -201,7 +199,7 @@ GAUGE_LAST_PCT="0"
 GAUGE_LAST_MSG="Starting..."
 
 bootstrap_tui() {
-  command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && return 0
+  command -v whiptail >/dev/null 2>&1 && return 0
   tty_available || return 0
   warn "Bootstrapping UI (installing whiptail)..."
   apt-get update -y
@@ -209,7 +207,7 @@ bootstrap_tui() {
 }
 
 has_tui() {
-  command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
+  command -v whiptail >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
 }
 
 
@@ -228,11 +226,11 @@ tui_msg() {
     local term="${TERM:-xterm}"
     local rc=0
     set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    TERM="$term" whiptail --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
     rc=$?
     set -e
     if [[ "$rc" != "0" ]]; then
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" msgbox failed (rc=$rc), falling back to text output"
+      warn "whiptail msgbox failed (rc=$rc), falling back to text output"
       TUI_ENABLED="false"
       echo "$title: $msg" >&2
     fi
@@ -248,11 +246,11 @@ tui_info() {
     local term="${TERM:-xterm}"
     local rc=0
     set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
+    TERM="$term" whiptail --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
     rc=$?
     set -e
     if [[ "$rc" != "0" ]]; then
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" infobox failed (rc=$rc), falling back to text output"
+      warn "whiptail infobox failed (rc=$rc), falling back to text output"
       TUI_ENABLED="false"
       echo "$title: $msg" >&2
     fi
@@ -267,21 +265,21 @@ tui_yesno() {
   local title="$1"
   local msg="$2"
 
-  # Try whiptail <"$TTY_DEV" >"$TTY_DEV" first, but NEVER die on whiptail <"$TTY_DEV" >"$TTY_DEV" issues under curl|bash.
+  # Try whiptail first, but NEVER die on whiptail issues under curl|bash.
   if [[ "$TUI_ENABLED" == "true" ]]; then
     local term="${TERM:-xterm}"
     local rc=0
 
     set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
+    TERM="$term" whiptail --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
     rc=$?
     set -e
 
-    # whiptail <"$TTY_DEV" >"$TTY_DEV" returns: 0=yes, 1=no. Anything else = broken environment -> fallback.
+    # whiptail returns: 0=yes, 1=no. Anything else = broken environment -> fallback.
     if [[ "$rc" == "0" ]]; then return 0; fi
     if [[ "$rc" == "1" ]]; then return 1; fi
 
-    warn "whiptail <"$TTY_DEV" >"$TTY_DEV" failed (rc=$rc), falling back to text prompt via /dev/tty"
+    warn "whiptail failed (rc=$rc), falling back to text prompt via /dev/tty"
     TUI_ENABLED="false"
   fi
 
@@ -306,7 +304,7 @@ tui_input() {
       TUI_ENABLED="false"
     else
       set +e
-      TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
+      TERM="$term" whiptail --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
         --output-fd 3 \
         </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
       rc=$?
@@ -332,7 +330,7 @@ tui_input() {
   return 1
       fi
 
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
+      warn "whiptail inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
       TUI_ENABLED="false"
     fi
   fi
@@ -354,7 +352,7 @@ gauge_start() {
   mkfifo "$GAUGE_PATH"
 
   set +e
-  TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "VPS Hardening" --gauge "Starting..." 10 76 0 \
+  TERM="$term" whiptail --clear --title "VPS Hardening" --gauge "Starting..." 10 76 0 \
     <"$GAUGE_PATH" >/dev/tty 2>/dev/tty &
   set -e
 
@@ -387,7 +385,7 @@ gauge_stop() {
 
 gauge_pause_for_dialog() {
   [[ "$TUI_ENABLED" == "true" ]] || return 0
-  # Stop gauge whiptail <"$TTY_DEV" >"$TTY_DEV" to avoid conflicts with other whiptail <"$TTY_DEV" >"$TTY_DEV" dialogs
+  # Stop gauge whiptail to avoid conflicts with other whiptail dialogs
   gauge_stop || true
 }
 
@@ -1029,7 +1027,7 @@ main() {
   bootstrap_tui
   tui_init
 
-  # Do NOT start gauge before interactive dialogs (would block whiptail <"$TTY_DEV" >"$TTY_DEV" input).
+  # Do NOT start gauge before interactive dialogs (would block whiptail input).
 
   interactive_setup
   confirm_or_exit
