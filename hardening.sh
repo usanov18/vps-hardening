@@ -36,10 +36,14 @@ tui_cleanup() {
 cleanup_all() {
   # stop gauge if running, then restore tty
   gauge_stop 2>/dev/null || true
-  tui_cleanup 2>/dev/null || true
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+  clear 2>/dev/null || true
+  # ensure shell prompt starts on a clean line after gauge
+  printf "
+" 2>/dev/null || true
 }
-
-
 tui_cleanup() {
   # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
@@ -427,14 +431,23 @@ ask_port_loop() {
     if is_valid_port "$val"; then
       # If port is already listening, handle it safely.
       if port_has_tcp_listener "$val"; then
-        # Allow re-using current SSH port on re-runs (sshd is already listening).
+        # If sshd is already listening here, it's typically OK (re-run / selecting current SSH port).
         if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "$val"; then
-          warn "🇷🇺 Порт $val уже используется SSH (sshd). Это нормально — продолжаю."
-          warn "🇬🇧 Port $val is already used by SSH (sshd). This is OK — continuing."
+          gauge_pause_for_dialog || true
+          if tui_yesno "SSH port already active / SSH уже активен" \
+            "🇷🇺 Порт $val уже слушается SSH (sshd). Это нормально при повторном запуске.\n\nИспользовать этот порт снова?\n\n🇬🇧 Port $val is already used by SSH (sshd). This is normal on re-runs.\n\nUse this port again?"; then
+            gauge_resume_after_dialog || true
+            # accept $val as-is
+            :
+          else
+            gauge_resume_after_dialog || true
+            continue
+          fi
         else
           gauge_pause_for_dialog || true
           if ! tui_yesno "Port in use / Порт занят" \
-            "🇷🇺 Порт $val уже занят другим сервисом (TCP LISTEN).\nНужно выбрать другой порт.\n\nНажми Yes — выбрать другой.\nНажми No — отмена (скрипт остановится).\n\n🇬🇧 Port $val is already in use by another service (TCP LISTEN).\nYou must choose another port.\n\nPress Yes to choose another.\nPress No to cancel (script will stop)."; then
+            "🇷🇺 Порт $val уже занят другим сервисом (TCP LISTEN).\n      Нужно выбрать другой порт.\n\n      Нажми Yes — выбрать другой.\nНажми No — отмена (скрипт остановится).\n\n      🇬🇧 Port $val is already in use by another service (TCP LISTEN).\n      You must choose another port.\n\n      Press Yes to choose another.\nPress No to cancel (script will stop)."; then
+            gauge_resume_after_dialog || true
             die "Aborted by user during port selection."
           fi
           gauge_resume_after_dialog || true
