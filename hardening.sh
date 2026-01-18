@@ -431,6 +431,14 @@ ask_port_loop() {
     if is_valid_port "$val"; then
       # If port is already listening, handle it safely.
       if port_has_tcp_listener "$val"; then
+# SSH re-run fast path: accept current SSH port if sshd is listening
+if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "${val}"; then
+  tui_msg "SSH port already active / SSH уже активен" \
+    "🇷🇺 Порт ${val} уже используется SSH (sshd). Это нормально при повторном запуске.\n\nПродолжаю с этим портом.\n\n🇬🇧 Port ${val} is already used by SSH (sshd). This is normal on re-runs.\n\nContinuing with this port."
+  printf '%s\n' "${val}"
+  return 0
+fi
+
         # If sshd is already listening here, it's typically OK (re-run / selecting current SSH port).
         if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "$val"; then
           gauge_pause_for_dialog || true
