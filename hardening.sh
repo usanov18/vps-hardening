@@ -1046,7 +1046,6 @@ main() {
   gauge_stop
 
   finalize_tui
-  finalize_tui
 step "DONE / ГОТОВО"
 echo "==> DONE / ГОТОВО"
   warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
@@ -1072,7 +1071,7 @@ finalize_tui() {
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
   tput cnorm 2>/dev/null || true
-  whiptail --clear 2>/dev/null || true
+  tput rmcup 2>/dev/null || true
   : # no clear here
   printf "\n" 2>/dev/null || true
 }
