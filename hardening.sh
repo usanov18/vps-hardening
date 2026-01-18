@@ -2,6 +2,10 @@
 set -euo pipefail
 
 
+
+# trap-safety: ensure finalize_tui exists even if EXIT/ERR fires early
+finalize_tui() { :; }
+
 TTY_DEV="/dev/tty"
 
 # ============================================================
@@ -389,11 +393,7 @@ gauge_update() {
   GAUGE_LAST_MSG="$msg"
 
   [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
-
-  # If gauge is not running / FD isn't valid, do nothing (no stray output)
   [[ -n "${GAUGE_FD:-}" ]] || return 0
-
-  # Validate FD (avoid "Bad file descriptor" / "ambiguous redirect")
   { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
 
   {
@@ -405,10 +405,10 @@ gauge_update() {
 }
 
 
+
 gauge_stop() {
   [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
 
-  # Try to finalize nicely, but never break on missing FD/PID
   gauge_update 100 "Done." || true
 
   if [[ -n "${GAUGE_FD:-}" ]]; then
@@ -427,18 +427,29 @@ gauge_stop() {
 }
 
 
+
 gauge_pause_for_dialog() {
-  [[ "$TUI_ENABLED" == "true" ]] || return 0
-  # Stop gauge whiptail <"$TTY_DEV" >"$TTY_DEV" to avoid conflicts with other whiptail <"$TTY_DEV" >"$TTY_DEV" dialogs
-  gauge_stop || true
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
+  [[ -n "${GAUGE_FD:-}" ]] || return 0
+  { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
+
+  # Temporarily stop feeding gauge while showing dialogs
+  exec {GAUGE_FD}>&- 2>/dev/null || true
 }
 
+
 gauge_resume_after_dialog() {
-  [[ "$TUI_ENABLED" == "true" ]] || return 0
-  # Resume gauge (best-effort) with last known state
-  gauge_start || true
-  gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-Resuming...}" || true
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
+  [[ -n "${GAUGE_PATH:-}" ]] || return 0
+  [[ -p "${GAUGE_PATH}" ]] || return 0
+
+  # Re-open FIFO writer end; if gauge already gone, stay silent.
+  exec {GAUGE_FD}>"$GAUGE_PATH" 2>/dev/null || { GAUGE_FD=""; return 0; }
+
+  # Restore last gauge state (best-effort)
+  gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-}" || true
 }
+
 
 
 # ---------- port helpers ----------
