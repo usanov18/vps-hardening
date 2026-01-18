@@ -137,6 +137,9 @@ ENABLE_UFW="yes"
 # 🇬🇧 Optional pause before enabling UFW so user can test SSH on the NEW port
 ENABLE_TEST_PAUSE="yes"
 
+# User confirmed SSH login works on the NEW port during checkpoint
+SSH_TEST_CONFIRMED="no"
+
 # ---------- TUI helpers (whiptail) ----------
 TUI_ENABLED="false"
 GAUGE_FD=""
@@ -691,6 +694,14 @@ checkpoint_optional_pause() {
   CURRENT_STEP="Checkpoint (optional SSH test pause)"
   [[ "$ENABLE_TEST_PAUSE" == "yes" && "$SSH_PORT" != "22" ]] || return 0
 
+
+
+  # If UFW is already active (e.g., firewall enabled before this script),
+  # temporarily allow the NEW SSH port so the checkpoint test is meaningful.
+  if ufw_is_active; then
+    warn "UFW is already active. Temporarily allowing SSH port ${SSH_PORT}/tcp for checkpoint test..."
+    ufw_temp_allow_port "${SSH_PORT}"
+  fi
   tui_msg "Checkpoint" \
     "🇷🇺 Пожалуйста, проверь вход по SSH на новом порту ${SSH_PORT} в отдельном окне.
 Если вход НЕ работает — нажми Cancel и НЕ продолжай.
@@ -706,9 +717,26 @@ If it does NOT work — press Cancel and do NOT continue."
   if ! tui_yesno "Proceed?" "Proceed to enable UFW now? / Продолжить и включить UFW?"; then
     die "Aborted by user (SSH test checkpoint)."
   fi
+
+  SSH_TEST_CONFIRMED="yes"
 }
 
 # ---------- firewall ----------
+
+# ---------- firewall helpers ----------
+ufw_is_active() {
+  command -v ufw >/dev/null 2>&1 || return 1
+  ufw status 2>/dev/null | head -n 1 | grep -qi '^Status:\s*active'
+}
+
+ufw_temp_allow_port() {
+  local port="$1"
+  # Best-effort: allow the new SSH port for checkpoint testing IF UFW is already active.
+  # This is temporary: configure_ufw() will reset rules anyway.
+  ufw allow "${port}/tcp" comment "SSH (temp for checkpoint)" >/dev/null 2>&1 || true
+  ufw reload >/dev/null 2>&1 || true
+}
+
 configure_ufw() {
   CURRENT_STEP="Configure firewall (UFW)"
   step "4/4 FIREWALL (UFW) / ФАЕРВОЛ"
@@ -747,6 +775,16 @@ configure_ufw() {
 
   ufw --force enable
   ufw status verbose
+
+
+  # After firewall is enabled with the NEW SSH port allowed, optionally drop legacy port 22 from sshd_config.
+  if [[ "${SSH_TEST_CONFIRMED:-no}" == "yes" && "${SSH_PORT}" != "22" ]]; then
+    if grep -qE '^\s*Port\s+22\s*$' /etc/ssh/sshd_config 2>/dev/null; then
+      warn "Removing legacy SSH Port 22 from sshd_config (confirmed new port works)..."
+      sed -i -E '/^\s*Port\s+22\s*$/d' /etc/ssh/sshd_config
+      systemctl restart ssh || true
+    fi
+  fi
 }
 
 # ---------- fail2ban ----------
