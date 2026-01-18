@@ -39,7 +39,6 @@ cleanup_all() {
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
   tput cnorm 2>/dev/null || true
-  clear 2>/dev/null || true
   # ensure shell prompt starts on a clean line after gauge
   printf "
 " 2>/dev/null || true
@@ -556,7 +555,7 @@ interactive_setup() {
       break
     done
 
-  if [[ "$SSH_PORT" != "22" ]]; then
+  if [[ "$SSH_PORT" != "22" && "${SSH_PORT_REUSED:-no}" != "yes" ]]; then
     warn "🇷🇺 Ты выбрал SSH порт ${SSH_PORT}. Порт 22 будет закрыт firewall'ом после включения UFW."
     warn "🇷🇺 Не закрывай текущую SSH-сессию и проверь вход по новому порту в отдельном окне."
     warn "🇬🇧 You selected SSH port ${SSH_PORT}. Port 22 will be blocked by firewall once UFW is enabled."
@@ -1018,6 +1017,7 @@ main() {
 
   finalize_tui
   step "DONE / ГОТОВО"
+echo "==> DONE / ГОТОВО"
   warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
   warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
 
