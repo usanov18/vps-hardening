@@ -10,3 +10,12 @@ _snapshot_git_status.txt
 _snapshot_git_log.txt
 _snapshot_git_diff.patch
 vps-hardening_snapshot.tar.gz
+
+# local debug snapshots
+_snapshot_git_diff_*.patch
+_snapshot_git_log_*.txt
+_snapshot_git_status_*.txt
+
+# accidental TUI artifacts / local folders
+SETUP
+SUMMARY
