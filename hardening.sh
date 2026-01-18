@@ -744,7 +744,8 @@ checkpoint_optional_pause() {
     warn "UFW is already active. Temporarily allowing SSH port ${SSH_PORT}/tcp for checkpoint test..."
     ufw_temp_allow_port "${SSH_PORT}"
   fi
-  tui_msg "Checkpoint" \
+  # SSH test checkpoint: confirm that you can log in on the NEW port before enabling UFW.
+  if ! tui_yesno "SSH test result / Результат проверки" \
     "🇷🇺 СЕЙЧАС проверь вход по SSH на новом порту ${SSH_PORT}.
 
 1) НЕ закрывай эту сессию.
@@ -757,10 +758,12 @@ checkpoint_optional_pause() {
 1) Do NOT close this session.
 2) Open a SECOND terminal and run:
    ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
-3) If login does NOT work — press Cancel and do NOT continue."
+3) If login does NOT work — press Cancel and do NOT continue.
 
+🇷🇺 Если вход НЕ работает — выбери No (Cancel) и НЕ продолжай.
+🇬🇧 If login does NOT work — choose No (Cancel) and do NOT continue.
 
-  if ! tui_yesno "Proceed?" "Proceed to enable UFW now? / Продолжить и включить UFW?"; then
+✅ Did login on port ${SSH_PORT} work? / ✅ Вход по порту ${SSH_PORT} работает?" ; then
     die "Aborted by user (SSH test checkpoint)."
   fi
 
@@ -849,7 +852,7 @@ configure_ufw() {
   fi
 
   ufw --force enable
-  ufw status verbose
+  ufw status verbose >/dev/null
 
   finalize_legacy_ssh_port_22_if_confirmed
 }
