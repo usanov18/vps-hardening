@@ -3,3 +3,10 @@
 hardening.sh.bak.*
 # TUI artifacts (sometimes pasted as box-drawing char filenames)
 │
+
+# Local snapshots / debug artifacts
+README.md.bak.*
+_snapshot_git_status.txt
+_snapshot_git_log.txt
+_snapshot_git_diff.patch
+vps-hardening_snapshot.tar.gz
