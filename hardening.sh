@@ -26,14 +26,21 @@ set -euo pipefail
 # ============================================================
 
 # ---------- output helpers ----------
+
+tui_cleanup() {
+  # Best-effort terminal restore after whiptail / gauge / abrupt exits
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  clear 2>/dev/null || true
+}
+
 log()  { echo "[$(date -Is)] $*"; }
 warn() { echo "[$(date -Is)] [WARNING] $*" >&2; }
 step() { echo; echo "========== $* =========="; }
-die()  { echo "ERROR: $*" >&2; exit 1; }
-
+die()  { tui_cleanup || true; echo "ERROR: $*" >&2; exit 1; }
 CURRENT_STEP="(starting)"
-trap 'die "Script failed during step: ${CURRENT_STEP}. Check output above."' ERR
-
+trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
+trap 'tui_cleanup || true' EXIT
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
@@ -145,6 +152,8 @@ TUI_ENABLED="false"
 GAUGE_FD=""
 GAUGE_PATH=""
 GAUGE_PID=""
+GAUGE_LAST_PCT="0"
+GAUGE_LAST_MSG="Starting..."
 
 bootstrap_tui() {
   command -v whiptail >/dev/null 2>&1 && return 0
@@ -306,6 +315,8 @@ gauge_start() {
 gauge_update() {
   local pct="$1"
   local msg="$2"
+  GAUGE_LAST_PCT="$pct"
+  GAUGE_LAST_MSG="$msg"
   [[ "$TUI_ENABLED" == "true" ]] || return 0
   {
     echo "XXX"
@@ -323,10 +334,35 @@ gauge_stop() {
   wait "$GAUGE_PID" 2>/dev/null || true
 }
 
+gauge_pause_for_dialog() {
+  [[ "$TUI_ENABLED" == "true" ]] || return 0
+  # Stop gauge whiptail to avoid conflicts with other whiptail dialogs
+  gauge_stop || true
+}
+
+gauge_resume_after_dialog() {
+  [[ "$TUI_ENABLED" == "true" ]] || return 0
+  # Resume gauge (best-effort) with last known state
+  gauge_start || true
+  gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-Resuming...}" || true
+}
+
+
 # ---------- port helpers ----------
 is_valid_port() {
   [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
 }
+
+port_has_tcp_listener() {
+  local port="$1"
+  ss -lnt "sport = :${port}" 2>/dev/null | tail -n +2 | grep -q LISTEN
+}
+
+port_tcp_listener_is_sshd() {
+  local port="$1"
+  ss -lntp "sport = :${port}" 2>/dev/null | grep -q '"sshd"'
+}
+
 
 # Returns TCP LISTEN lines for a given port (best-effort; may be empty).
 get_tcp_listeners_for_port() {
@@ -370,6 +406,22 @@ ask_port_loop() {
     fi
 
     if is_valid_port "$val"; then
+      # If port is already listening, handle it safely.
+      if port_has_tcp_listener "$val"; then
+        # Allow re-using current SSH port on re-runs (sshd is already listening).
+        if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "$val"; then
+          warn "🇷🇺 Порт $val уже используется SSH (sshd). Это нормально — продолжаю."
+          warn "🇬🇧 Port $val is already used by SSH (sshd). This is OK — continuing."
+        else
+          gauge_pause_for_dialog || true
+          if ! tui_yesno "Port in use / Порт занят" \
+            "🇷🇺 Порт $val уже занят другим сервисом (TCP LISTEN).\nНужно выбрать другой порт.\n\nНажми Yes — выбрать другой.\nНажми No — отмена (скрипт остановится).\n\n🇬🇧 Port $val is already in use by another service (TCP LISTEN).\nYou must choose another port.\n\nPress Yes to choose another.\nPress No to cancel (script will stop)."; then
+            die "Aborted by user during port selection."
+          fi
+          gauge_resume_after_dialog || true
+          continue
+        fi
+      fi
       printf '%s
 ' "$val"
       return 0
@@ -388,7 +440,7 @@ ask_unique_port_loop() {
   while true; do
     val="$(ask_port_loop "$title" "$prompt" "$default")" || return 1
     if port_is_duplicate "$val" "${existing[@]}"; then
-      tui_msg "$title" "This port is already used by another selection. Choose a different one."
+      tui_msg "$title" "🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.\n\n🇬🇧 This port is already used by another selection. Choose a different one."
       continue
     fi
     echo "$val"; return 0
@@ -768,6 +820,7 @@ checkpoint_optional_pause() {
   fi
 
   SSH_TEST_CONFIRMED="yes"
+  gauge_resume_after_dialog || true
 }
 
 finalize_legacy_ssh_port_22_if_confirmed() {
@@ -852,7 +905,7 @@ configure_ufw() {
   fi
 
   ufw --force enable
-  ufw status verbose >/dev/null
+  ufw status verbose >/dev/null >/dev/null
 
   finalize_legacy_ssh_port_22_if_confirmed
 }
