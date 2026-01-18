@@ -495,21 +495,8 @@ interactive_setup() {
   fi
 
   if [[ "$SSH_PORT" != "22" ]]; then
-    if tui_yesno "Safety pause" \
-      "Pause BEFORE enabling UFW so you can test SSH on the NEW port.
-
-✅ Open a SECOND terminal/session NOW and try:
-  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
-
-🇷🇺 Пауза ПЕРЕД включением UFW, чтобы проверить вход по НОВОМУ SSH порту.
-
-✅ Открой ВТОРОЕ окно/сессию и выполни:
-  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
-
-If login FAILS: choose No here OR press Cancel at the checkpoint.
-If you choose No: the script will continue WITHOUT waiting (and will NOT remove Port 22 automatically).
-
-Default: Yes"; then
+    if tui_yesno "SSH test checkpoint" \
+      "Enable an extra safety checkpoint to test SSH on the NEW port AFTER SSH is reconfigured, but BEFORE enabling UFW?\n\n✅ Later in this run the script will STOP and ask you to open a second session and test:\n  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>\n\n🇷🇺 Включить дополнительный контрольный чекпоинт для проверки SSH на НОВОМ порту ПОСЛЕ применения настроек SSH, но ДО включения UFW?\n\n✅ Позже в этом запуске скрипт ОСТАНОВИТСЯ и попросит открыть вторую сессию и проверить:\n  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>\n\nDefault: Yes"; then
       ENABLE_TEST_PAUSE="yes"
     else
       ENABLE_TEST_PAUSE="no"
