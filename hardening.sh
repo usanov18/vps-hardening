@@ -535,7 +535,7 @@ interactive_setup() {
 🇷🇺 Если это SSH (sshd) — это нормально при повторном запуске.
 🇬🇧 If this is SSH (sshd) — it's normal on re-runs.
 
-Using it for SSH may FAIL.\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
+Using it for SSH may FAIL (unless it's sshd on a re-run).\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
         continue
       fi
     fi
