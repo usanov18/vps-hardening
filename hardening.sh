@@ -30,33 +30,49 @@ tui_cleanup() {
   # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
-  clear 2>/dev/null || true
+  : # no clear here
 }
 
 cleanup_all() {
-  # stop gauge if running, then restore tty
+  # stop gauge if running, then restore tty (best-effort)
   gauge_stop 2>/dev/null || true
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
-  # ensure shell prompt starts on a clean line after gauge
-  printf "
-" 2>/dev/null || true  # --- hard TUI/TTY restore ---
-  gauge_stop 2>/dev/null || true
-  # Exit whiptail/alternate screen if enabled
+
+  # Leave whiptail/alternate screen if it was used
   tput rmcup 2>/dev/null || true
+
   stty sane 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
   tput sgr0 2>/dev/null || true
-  whiptail --clear 2>/dev/null || true
-  printf "\n" 2>/dev/null || true
+  tput cnorm 2>/dev/null || true
+
+  # Do NOT "clear" here: it erases the final output.
+  # Instead, just clean the current line and move to a fresh prompt line.
+  if [[ -n "${CONSOLE_FD:-}" ]]; then
+    printf '\r\033[K\n' >&"$CONSOLE_FD" 2>/dev/null || true
+  else
+    printf '\r\033[K\n' >/dev/tty 2>/dev/null || true
+  fi
 }
+
+on_exit() {
+  local rc=$?
+  cleanup_all || true
+
+  # Print DONE to the real console (stdout is redirected to logfile)
+  if [[ $rc -eq 0 ]]; then
+    if command -v say >/dev/null 2>&1; then
+      say "==> DONE / ГОТОВО"
+    else
+      printf "\n==> DONE / ГОТОВО\n" >/dev/tty 2>/dev/null || true
+    fi
+  fi
+}
+
 
 tui_cleanup() {
   # Best-effort terminal restore after whiptail / gauge / abrupt exits
   stty sane 2>/dev/null || true
   tput sgr0 2>/dev/null || true
-  clear 2>/dev/null || true
+  : # no clear here
 }
 
 log()  { echo "[$(date -Is)] $*"; }
@@ -1057,6 +1073,6 @@ finalize_tui() {
   tput sgr0 2>/dev/null || true
   tput cnorm 2>/dev/null || true
   whiptail --clear 2>/dev/null || true
-  clear 2>/dev/null || true
+  : # no clear here
   printf "\n" 2>/dev/null || true
 }
