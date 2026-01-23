@@ -7,132 +7,171 @@ Interactive bootstrap & hardening script for a fresh VPS.
 Run on a fresh Ubuntu VPS (recommended: review before running):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh | bash
-```
-
+curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh | sudo bash
 Safer (download first):
 
-```bash
+bash
+Копировать код
 curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
 chmod +x hardening.sh
-./hardening.sh
-```
+sudo bash ./hardening.sh
+ℹ️ Notes
 
-> Tip: run as root or via sudo. The script is interactive (whiptail).
+Run as root or via sudo
 
-Designed for **clarity, safety, and repeatability**, with a focus on DevOps best practices.
+The script is interactive (uses whiptail)
 
----
+Re-running the script is supported and safe (previous choices are remembered)
 
-## ✨ Features
+Designed for clarity, safety, and repeatability, with a focus on DevOps best practices.
 
-- ✅ **Interactive TUI (whiptail)**  
-  Clean dialog windows, confirmations, and progress gauge
+✨ Features
+✅ Interactive TUI (whiptail)
+Clean dialog windows, confirmations, and progress gauge
 
-- 🔐 **SSH hardening**
-  - Choose custom SSH port
-  - Supports `ssh.socket` (systemd socket activation)
-  - No unsafe assumptions (root login and password auth are NOT disabled)
+🔐 SSH hardening
 
-- 🔥 **Firewall (UFW)**
-  - Default deny incoming
-  - Opens only selected ports
-  - Explicit warning before rules reset
+Choose custom SSH port
 
-- 🛡 **Fail2Ban**
-  - Enabled for SSH
-  - Automatically uses selected SSH port
+Supports ssh.socket (systemd socket activation)
 
-- ♻️ **Stateful**
-  - Remembers ports from previous run
-  - Shows previous selections on next execution
+No unsafe assumptions (root login and password auth are NOT disabled)
 
-- 🧠 **Safe by design**
-  - No hacks
-  - No hidden changes
-  - Explicit checkpoints before irreversible steps
+🔥 Firewall (UFW)
 
----
+Default deny incoming
 
-## 🧩 What this script intentionally does NOT do
+Opens only selected ports
 
-- ❌ Does NOT manage SSH keys (`authorized_keys`)
-- ❌ Does NOT disable `root` login
-- ❌ Does NOT disable password authentication
-- ❌ Does NOT install application stacks (e.g. 3x-ui)
+Explicit warning before rules reset
 
-These decisions are left to the user as **personal / security-sensitive choices**.
+🛡 Fail2Ban
 
----
+Enabled for SSH
 
-## 🖥 Supported systems
+Automatically uses selected SSH port
 
-- Ubuntu **24.04 LTS**
-- Tested with:
-  - systemd
-  - `ssh.socket` enabled
-  - fresh VPS installations
+♻️ Stateful
 
----
+Remembers ports from previous run
+
+Shows previous selections on next execution
+
+🧠 Safe by design
+
+No hacks
+
+No hidden changes
+
+Explicit checkpoints before irreversible steps
+
+🧩 What this script intentionally does NOT do
+❌ Does NOT manage SSH keys (authorized_keys)
+
+❌ Does NOT disable root login
+
+❌ Does NOT disable password authentication
+
+❌ Does NOT install application stacks (e.g. 3x-ui)
+
+These decisions are left to the user as personal / security-sensitive choices.
+
+🖥 Supported systems
+Ubuntu 24.04 LTS
+
+Tested with:
+
+systemd
+
+ssh.socket enabled
+
+fresh VPS installations
 
 ================================================================================
 
----
+VPS Hardening Script (Ubuntu 24+)
+Интерактивный скрипт начальной настройки и базового харденинга VPS.
+Разработан с упором на прозрачность, безопасность и повторяемость, в стиле DevOps-практик.
 
-# VPS Hardening Script (Ubuntu 24+)
+🚀 Быстрый запуск
+Рекомендуемый способ (сразу выполнить):
 
-Интерактивный скрипт начальной настройки и базового харденига VPS.  
-Разработан с упором на **прозрачность, безопасность и повторяемость**, в стиле DevOps-практик.
+bash
+Копировать код
+curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh | sudo bash
+Более безопасный вариант (скачать и проверить):
 
----
+bash
+Копировать код
+curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
+chmod +x hardening.sh
+sudo bash ./hardening.sh
+ℹ️ Важно
 
-## ✨ Возможности
+Запускать от root или через sudo
 
-- ✅ **Интерактивный TUI-интерфейс (whiptail)**  
-  Диалоговые окна, подтверждения и индикатор прогресса
+Скрипт интерактивный (whiptail)
 
-- 🔐 **Настройка SSH**
-  - Выбор пользовательского SSH-порта
-  - Поддержка `ssh.socket` (systemd socket activation)
-  - Без опасных допущений (root-доступ и парольный вход НЕ отключаются)
+Повторный запуск поддерживается и безопасен
 
-- 🔥 **Firewall (UFW)**
-  - Политика deny incoming / allow outgoing
-  - Открываются только выбранные порты
-  - Явное предупреждение перед сбросом правил
+✨ Возможности
+✅ Интерактивный TUI-интерфейс (whiptail)
+Диалоговые окна, подтверждения и индикатор прогресса
 
-- 🛡 **Fail2Ban**
-  - Включён для SSH
-  - Автоматически использует выбранный SSH-порт
+🔐 Настройка SSH
 
-- ♻️ **Stateful-поведение**
-  - Запоминает порты из прошлого запуска
-  - Показывает прошлый выбор при повторном запуске
+Выбор пользовательского SSH-порта
 
-- 🧠 **Безопасная архитектура**
-  - Без хаков
-  - Без скрытых изменений
-  - Контрольные точки перед необратимыми шагами
+Поддержка ssh.socket (systemd socket activation)
 
----
+Без опасных допущений (root-доступ и парольный вход НЕ отключаются)
 
-## 🧩 Что скрипт намеренно НЕ делает
+🔥 Firewall (UFW)
 
-- ❌ НЕ управляет SSH-ключами (`authorized_keys`)
-- ❌ НЕ отключает `root`-доступ
-- ❌ НЕ отключает парольную аутентификацию
-- ❌ НЕ устанавливает прикладные сервисы (например, 3x-ui)
+Политика deny incoming / allow outgoing
 
-Эти действия оставлены пользователю как **персональные и чувствительные к безопасности решения**.
+Открываются только выбранные порты
 
----
+Явное предупреждение перед сбросом правил
 
-## 🖥 Поддерживаемые системы
+🛡 Fail2Ban
 
-- Ubuntu **24.04 LTS**
-- Протестировано на:
-  - systemd
-  - включённом `ssh.socket`
-  - свежих VPS-инсталляциях
+Включён для SSH
 
----
+Автоматически использует выбранный SSH-порт
+
+♻️ Stateful-поведение
+
+Запоминает порты из прошлого запуска
+
+Показывает прошлый выбор при повторном запуске
+
+🧠 Безопасная архитектура
+
+Без хаков
+
+Без скрытых изменений
+
+Контрольные точки перед необратимыми шагами
+
+🧩 Что скрипт намеренно НЕ делает
+❌ НЕ управляет SSH-ключами (authorized_keys)
+
+❌ НЕ отключает root-доступ
+
+❌ НЕ отключает парольную аутентификацию
+
+❌ НЕ устанавливает прикладные сервисы (например, 3x-ui)
+
+Эти действия оставлены пользователю как персональные и чувствительные к безопасности решения.
+
+🖥 Поддерживаемые системы
+Ubuntu 24.04 LTS
+
+Протестировано на:
+
+systemd
+
+включённом ssh.socket
+
+свежих VPS-инсталляциях
