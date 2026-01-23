@@ -19,3 +19,4 @@ _snapshot_git_status_*.txt
 # accidental TUI artifacts / local folders
 SETUP
 SUMMARY
+hardening.sh.pre-gold.*
