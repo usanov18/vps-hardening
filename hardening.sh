@@ -8,18 +8,6 @@ finalize_tui() { :; }
 
 TTY_DEV="/dev/tty"
 
-# Finalization marker
-FINALIZED="no"
-
-# Runtime change markers (for final summary)
-BEFORE_SSH_PORT=""
-CHANGED_SSH_PORT="no"
-UFW_CONFIGURED="no"
-FAIL2BAN_CONFIGURED="no"
-BASE_PKGS_INSTALLED=()
-PKG_MISSING_BEFORE=()
-
-
 
 # graceful Ctrl+C handling (keeps TUI clean)
 INTERRUPTED="no"
@@ -61,6 +49,12 @@ trap 'on_int' INT
 # ============================================================
 
 # ---------- output helpers ----------
+tui_cleanup() {
+  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  : # no clear here
+}
 
 cleanup_all() {
   # stop gauge if running, then restore tty (best-effort)
@@ -84,16 +78,37 @@ cleanup_all() {
   fi
 }
 
+on_exit() {
+  local rc=$?
+  cleanup_all || true
+
+  # Print DONE to the real console (stdout is redirected to logfile)
+  if [[ $rc -eq 0 ]]; then
+    if command -v say >/dev/null 2>&1; then
+      say "==> DONE / ГОТОВО"
+    else
+      printf "\n==> DONE / ГОТОВО\n" >/dev/tty 2>/dev/null || true
+    fi
+  fi
+}
 
 
+tui_cleanup() {
+  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
+  stty sane 2>/dev/null || true
+  tput sgr0 2>/dev/null || true
+  : # no clear here
+}
 
 log()  { echo "[$(date -Is)] $*"; }
 warn() { echo "[$(date -Is)] [WARNING] $*" >&2; }
 step() { echo; echo "========== $* =========="; }
 die()  { cleanup_all || true; echo "ERROR: $*" >&2; exit 1; }
 CURRENT_STEP="(starting)"
-trap 'tui_cleanup || true; say \"ERROR: failed during step: ${CURRENT_STEP}. See log: ${LOG_FILE}\"; exit 1' ERR
-trap 'cleanup_all || true' EXIT
+trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
+trap 'rc=$?; cleanup_all || true; if [[ $rc -eq 0 && "${INTERRUPTED:-no}" != "yes" ]]; then printf "
+==> DONE / ГОТОВО
+"; fi' EXIT
 require_root() {
   [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
 }
@@ -175,136 +190,6 @@ console_init() {
 
 say() { printf '%s\n' "$*" >&"$CONSOLE_FD"; }
 
-checkpoint_ui() {
-  # UI checkpoint: whiptail buttons, TTY-safe. Return 0=yes, 1=no/cancel.
-  say ""
-  say "------------------------------------------------------------"
-  say "🇷🇺 КОНТРОЛЬНАЯ ТОЧКА: дальше будут применены изменения."
-  say "🇷🇺 Убедись, что второй SSH-вход работает (новый порт)."
-  say "🇬🇧 CHECKPOINT: changes will be applied next."
-  say "🇬🇧 Ensure a second SSH login works (new port)."
-  say "------------------------------------------------------------"
-  say ""
-
-  local rc
-  set +e
-  whiptail --title "CHECKPOINT / КОНТРОЛЬНАЯ ТОЧКА" \
-    --yesno "Continue applying changes?\n\n🇷🇺 Продолжить применение изменений?\n\n🇬🇧 Continue?" 14 70 \
-    <"$TTY_DEV" >"$TTY_DEV" 2>&1
-  rc=$?
-  set -e
-
-  # restore terminal just in case
-  stty sane <"$TTY_DEV" 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
-
-  case "$rc" in
-    0) return 0 ;;
-    1|255) return 1 ;;
-    *) return 1 ;;
-  esac
-}
-
-
-
-pkg_installed() { dpkg -s "$1" >/dev/null 2>&1; }
-
-snapshot_pkg_missing() {
-  PKG_MISSING_BEFORE=()
-  for p in "$@"; do
-    pkg_installed "$p" || PKG_MISSING_BEFORE+=("$p")
-  done
-}
-
-mark_newly_installed_pkgs() {
-  for p in "${PKG_MISSING_BEFORE[@]:-}"; do
-    pkg_installed "$p" && BASE_PKGS_INSTALLED+=("$p")
-  done
-}
-
-get_effective_ssh_port() {
-  local p=""
-  if command -v sshd >/dev/null 2>&1; then
-    p="$(sshd -T 2>/dev/null | awk '$1=="port"{print $2; exit}')" || true
-  fi
-  [[ -n "$p" ]] || p="22"
-  echo "$p"
-}
-
-get_ssh_listeners_brief() {
-  local port="$1"
-  ss -lnt 2>/dev/null | awk -v p=":${port}" '$1=="LISTEN" && $4 ~ (p"$") {print $4}' | sort -u | paste -sd" " -
-}
-
-get_ufw_allows_brief() {
-  command -v ufw >/dev/null 2>&1 || { echo "(ufw not installed)"; return 0; }
-  ufw status 2>/dev/null \
-    | awk 'BEGIN{in=0} /^To[[:space:]]+Action[[:space:]]+From/ {in=1; next} in && $0 ~ /ALLOW/ {to=$1; gsub(/[[:space:]]+/,"",to); if(to!="") print to}' \
-    | sed 's/(v6)//g' | sort -u | paste -sd", " -
-}
-
-get_fail2ban_brief() {
-  systemctl list-unit-files 2>/dev/null | grep -q '^fail2ban\.service' || { echo "not installed"; return 0; }
-  local enabled active
-  enabled="$(systemctl is-enabled fail2ban 2>/dev/null || true)"
-  active="$(systemctl is-active fail2ban 2>/dev/null || true)"
-  if command -v fail2ban-client >/dev/null 2>&1; then
-    local banned total
-    banned="$(fail2ban-client status sshd 2>/dev/null | awk -F': ' '/Currently banned/{print $2; exit}')"
-    total="$(fail2ban-client status sshd 2>/dev/null | awk -F': ' '/Total banned/{print $2; exit}')"
-    banned="${banned:-?}"; total="${total:-?}"
-    echo "${active} (enabled: ${enabled}), sshd jail: banned ${banned}, total ${total}"
-  else
-    echo "${active} (enabled: ${enabled})"
-  fi
-}
-
-print_final_summary() {
-  local ssh_port listeners ufw_allows f2b
-  ssh_port="$(get_effective_ssh_port)"
-  listeners="$(get_ssh_listeners_brief "$ssh_port")"
-  ufw_allows="$(get_ufw_allows_brief)"
-  f2b="$(get_fail2ban_brief)"
-
-  say ""
-  say "==================== VPS HARDENING SUMMARY ===================="
-  say "This run changed"
-  if [[ "${CHANGED_SSH_PORT}" == "yes" ]]; then
-    say "  • SSH port updated: ${BEFORE_SSH_PORT:-?} -> ${ssh_port}"
-  fi
-  if [[ "${UFW_CONFIGURED}" == "yes" ]]; then
-    say "  • UFW configured and enabled"
-  fi
-  if [[ "${FAIL2BAN_CONFIGURED}" == "yes" ]]; then
-    say "  • Fail2Ban configured and enabled"
-  fi
-  if [[ "${#BASE_PKGS_INSTALLED[@]}" -gt 0 ]]; then
-    say "  • Packages installed: ${BASE_PKGS_INSTALLED[*]}"
-  fi
-  if [[ "${CHANGED_SSH_PORT}${UFW_CONFIGURED}${FAIL2BAN_CONFIGURED}" == "nonono" && "${#BASE_PKGS_INSTALLED[@]}" -eq 0 ]]; then
-    say "  • No system changes (idempotent run)"
-  fi
-
-  say ""
-  say "SSH"
-  if [[ -n "$listeners" ]]; then
-    say "  • port: ${ssh_port}  (listening: ${listeners})"
-  else
-    say "  • port: ${ssh_port}  (listening: not detected via ss)"
-  fi
-  say "UFW"
-  say "  • allowed: ${ufw_allows:-none}"
-  say "Fail2Ban"
-  say "  • ${f2b}"
-  say "Log"
-  say "  • ${LOG_FILE:-/var/log/vps-hardening/...}"
-  say "==============================================================="
-  say ""
-  say "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
-  say "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
-}
-
-
 die() {
   say "ERROR: $*"
   say "Log: ${LOG_FILE:-/var/log/vps-hardening/...}"
@@ -348,7 +233,6 @@ GAUGE_PATH=""
 GAUGE_PID=""
 GAUGE_LAST_PCT="0"
 GAUGE_LAST_MSG="Starting..."
-GAUGE_PAUSED="no"
 
 bootstrap_tui() {
   command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && return 0
@@ -557,21 +441,24 @@ gauge_stop() {
 
 
 gauge_pause_for_dialog() {
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
   [[ -n "${GAUGE_FD:-}" ]] || return 0
-  [[ -n "${GAUGE_PATH:-}" ]] || return 0
-  GAUGE_PAUSED="yes"
+  { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
+
+  # Temporarily stop feeding gauge while showing dialogs
   exec {GAUGE_FD}>&- 2>/dev/null || true
 }
 
 
 gauge_resume_after_dialog() {
-  [[ "${GAUGE_PAUSED:-no}" == "yes" ]] || return 0
-  GAUGE_PAUSED="no"
-
+  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
   [[ -n "${GAUGE_PATH:-}" ]] || return 0
   [[ -p "${GAUGE_PATH}" ]] || return 0
 
+  # Re-open FIFO writer end; if gauge already gone, stay silent.
   exec {GAUGE_FD}<>"${GAUGE_PATH}" 2>/dev/null || { GAUGE_FD=""; return 0; }
+
+  # Restore last gauge state (best-effort)
   gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-}" || true
 }
 
@@ -833,9 +720,10 @@ confirm_or_exit() {
   log "Inbound port: ${inbound_txt}"
 
   echo
+  echo "------------------------------------------------------------"
   warn "🇷🇺 КОНТРОЛЬНАЯ ТОЧКА: дальше будут применены изменения."
   warn "🇬🇧 CHECKPOINT: changes will be applied next."
-  checkpoint_ui || { say "Stopped at checkpoint."; exit 1; }
+  echo "------------------------------------------------------------"
   echo
 
   local msg
@@ -888,15 +776,12 @@ apt_install() {
 
   warn "🇷🇺 Ставлю базовые утилиты (git, jq, unzip, htop, nano)."
   warn "🇬🇧 Installing helpful tools (git, jq, unzip, htop, nano)."
-  snapshot_pkg_missing ufw fail2ban ca-certificates curl gnupg lsb-release git jq unzip htop nano whiptail
 
-  
   apt-get install -y \
     ufw fail2ban \
     ca-certificates curl gnupg lsb-release \
     git jq unzip htop nano \
     whiptail
-  mark_newly_installed_pkgs
 }
 
 # ---------- ssh configuration ----------
@@ -982,7 +867,6 @@ configure_sshd() {
   step "3/4 SSH / НАСТРОЙКА SSH"
   gauge_update 55 "Configuring SSH..."
 
-  [[ -z "${BEFORE_SSH_PORT}" ]] && BEFORE_SSH_PORT="$(get_effective_ssh_port)"
   warn "🇷🇺 Сейчас будет изменена конфигурация SSH."
   warn "🇷🇺 Не закрывай текущую SSH-сессию; проверь вход по новому порту в отдельном окне."
   warn "🇬🇧 SSH config will be updated."
@@ -1047,9 +931,6 @@ configure_sshd() {
   fi
 
   log "SSH is active and listening on port ${SSH_PORT}."
-  if [[ -n "${BEFORE_SSH_PORT:-}" && "$(get_effective_ssh_port)" != "${BEFORE_SSH_PORT}" ]]; then
-    CHANGED_SSH_PORT="yes"
-  fi
 }
 
 checkpoint_optional_pause() {
@@ -1173,7 +1054,6 @@ configure_ufw() {
   fi
 
   ufw --force enable
-  UFW_CONFIGURED="yes"
   ufw status verbose >/dev/null >/dev/null
 
   finalize_legacy_ssh_port_22_if_confirmed
@@ -1204,9 +1084,8 @@ EOF
   systemctl enable --now fail2ban
   systemctl restart fail2ban
 
-  FAIL2BAN_CONFIGURED="yes"
-
-  log "Fail2Ban: $(systemctl is-active fail2ban 2>/dev/null || true) (enabled: $(systemctl is-enabled fail2ban 2>/dev/null || true))"
+  log "Fail2ban status (short):"
+  systemctl --no-pager --full status fail2ban | head -n 20 || true
 }
 
 main() {
@@ -1234,9 +1113,12 @@ main() {
   gauge_stop
 
   finalize_tui
+step "DONE / ГОТОВО"
+echo "==> DONE / ГОТОВО"
+  warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
+  warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
 
-  print_final_summary
-  FINALIZED="yes"
+  tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
 }
 
 # --- entrypoint ---
