@@ -23,3 +23,4 @@ hardening.sh.pre-gold.*
 
 # local prerelease backups
 hardening.sh.prerelease.*
+_snapshot_git_*
