@@ -1,26 +1,20 @@
-
 # --- local junk / мусор (generated locally) ---
 hardening.sh.bak.*
-# TUI artifacts (sometimes pasted as box-drawing char filenames)
-│
-
-# Local snapshots / debug artifacts
+hardening.sh.pre-gold.*
+hardening.sh.prerelease.*
 README.md.bak.*
+README.md.save
+
+# --- local snapshots / debug artifacts ---
+_snapshot_git_*
 _snapshot_git_status.txt
 _snapshot_git_log.txt
 _snapshot_git_diff.patch
+_snapshot_git_status_*.txt
+_snapshot_git_log_*.txt
+_snapshot_git_diff_*.patch
 vps-hardening_snapshot.tar.gz
 
-# local debug snapshots
-_snapshot_git_diff_*.patch
-_snapshot_git_log_*.txt
-_snapshot_git_status_*.txt
-
-# accidental TUI artifacts / local folders
+# --- accidental TUI / copy-paste artifacts ---
 SETUP
 SUMMARY
-hardening.sh.pre-gold.*
-
-# local prerelease backups
-hardening.sh.prerelease.*
-_snapshot_git_*
