@@ -20,3 +20,6 @@ _snapshot_git_status_*.txt
 SETUP
 SUMMARY
 hardening.sh.pre-gold.*
+
+# local prerelease backups
+hardening.sh.prerelease.*
