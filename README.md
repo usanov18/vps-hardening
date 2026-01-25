@@ -2,11 +2,7 @@
 
 Interactive bootstrap & hardening script for a fresh Ubuntu VPS.
 
-Designed for **clarity, safety, and repeatability**, with a strong focus on
-DevOps best practices and predictable behavior.
-
-The script is intentionally conservative and transparent:
-no hidden changes, no unsafe assumptions, no irreversible actions without confirmation.
+Designed for **clarity, safety, and repeatability**, with a focus on DevOps best practices and predictable behavior.
 
 ---
 
@@ -19,16 +15,14 @@ curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardeni
   -o /tmp/hardening.sh && \
 chmod +x /tmp/hardening.sh && \
 sudo /tmp/hardening.sh
-Tip: run in a normal SSH session.
-The script is interactive (whiptail) and requires a TTY.
+Tip: run in a normal SSH session. The script is interactive (whiptail) and requires a TTY.
 
 Safer alternative (download to current directory)
 curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
 chmod +x hardening.sh
 sudo ./hardening.sh
 ✨ Features
-✅ Interactive TUI (whiptail)
-Dialog windows, confirmations, and predictable UX
+✅ Interactive TUI (whiptail) — dialogs, confirmations, predictable UX
 
 🔐 SSH hardening
 
@@ -93,11 +87,9 @@ fresh VPS installations
 VPS Hardening Script (Ubuntu 24+)
 Интерактивный скрипт начальной настройки и базового харденига свежего Ubuntu VPS.
 
-Разработан с упором на прозрачность, безопасность и повторяемость,
-в стиле аккуратных DevOps-практик и предсказуемого поведения.
+Разработан с упором на прозрачность, безопасность и повторяемость, в стиле аккуратных DevOps-практик и предсказуемого поведения.
 
-Скрипт намеренно консервативен:
-без хаков, без скрытых изменений и без необратимых шагов без подтверждения.
+Скрипт намеренно консервативен: без хаков, без скрытых изменений и без необратимых шагов без подтверждения.
 
 🚀 Быстрый старт
 Рекомендуемый способ (скачать и запустить от root)
@@ -105,16 +97,14 @@ curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardeni
   -o /tmp/hardening.sh && \
 chmod +x /tmp/hardening.sh && \
 sudo /tmp/hardening.sh
-Совет: запускайте в обычной SSH-сессии.
-Скрипт интерактивный (whiptail) и требует TTY.
+Совет: запускайте в обычной SSH-сессии. Скрипт интерактивный (whiptail) и требует TTY.
 
 Более безопасный вариант (скачать в текущий каталог)
 curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
 chmod +x hardening.sh
 sudo ./hardening.sh
 ✨ Возможности
-✅ Интерактивный TUI-интерфейс (whiptail)
-Диалоговые окна, подтверждения и предсказуемый UX
+✅ Интерактивный TUI (whiptail) — диалоги, подтверждения, предсказуемый UX
 
 🔐 Настройка SSH
 
