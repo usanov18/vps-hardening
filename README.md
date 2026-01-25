@@ -1,15 +1,3 @@
-# VPS Hardening Script (Ubuntu 24+)
-
-Interactive bootstrap & hardening script for a fresh Ubuntu VPS.
-
-Designed for **clarity, safety, and repeatability**, with a focus on DevOps best practices and predictable behavior.
-
----
-
-## 🚀 Quick start
-
-### Recommended (download first, then run as root)
-
 ```bash
 curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh \
   -o /tmp/hardening.sh && \
@@ -56,25 +44,3 @@ SSH listening port(s)
 Active UFW rules
 
 Fail2Ban SSH jail port
-
-🧩 What this script intentionally does NOT do
-❌ Does NOT manage SSH keys (authorized_keys)
-
-❌ Does NOT disable root login
-
-❌ Does NOT disable password authentication
-
-❌ Does NOT install application stacks (panels, proxies, etc.)
-
-These decisions are left to the user as personal and security-sensitive choices.
-
-🖥 Supported systems
-Ubuntu 24.04 LTS
-
-Tested with:
-
-systemd
-
-ssh.socket enabled
-
-fresh VPS installations
