@@ -2,7 +2,7 @@
 
 Interactive bootstrap & basic hardening for a fresh Ubuntu VPS.
 
-This project is intentionally conservative: no “magic”, no hidden steps, and no irreversible actions without explicit confirmation.  
+This project is intentionally conservative: **no “magic”**, no hidden steps, and no irreversible actions without explicit confirmation.  
 The script focuses on predictable behavior, safe UX, and repeatable runs.
 
 ---
@@ -16,23 +16,13 @@ curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardeni
   -o /tmp/hardening.sh && \
 chmod +x /tmp/hardening.sh && \
 sudo /tmp/hardening.sh
-Tip: run in a normal SSH session. The script is interactive (whiptail) and requires a TTY.
+Tip: run in a normal SSH session.
+The script is interactive (whiptail) and requires a TTY.
 
 Safer alternative (download to current directory)
 curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
 chmod +x hardening.sh
 sudo ./hardening.sh
-✨ Features
-✅ Interactive TUI (whiptail)
-Clean dialogs, confirmations, and a progress gauge (no log spam in terminal).
-
-🔐 SSH configuration
-
-Choose a custom SSH port
-
-Supports ssh.socket (systemd socket activation)
-
-Root login and password authentication are NOT disabled (by design)
 
 🔥 Firewall (UFW)
 
@@ -40,7 +30,7 @@ Default: deny incoming / allow outgoing
 
 Opens only user-selected ports
 
-Explicit confirmation before applying changes
+Explicit confirmation before applying rules
 
 🛡 Fail2Ban
 
@@ -48,14 +38,13 @@ Enabled for SSH
 
 Automatically configured to the selected SSH port
 
-♻️ Stateful re-runs
+♻️ Stateful behavior
 
 Remembers ports from the previous run
 
-Shows previous selections at the start
+Shows previous selections on re-run
 
-📊 Final runtime summary (RUNTIME STATUS)
-At the end, prints:
+📊 Final runtime summary
 
 SSH listening port(s)
 
@@ -72,14 +61,7 @@ Fail2Ban SSH jail port
 
 ❌ Does NOT install application stacks (panels, proxies, 3x-ui, etc.)
 
-These choices are intentionally left to the user as personal and security-sensitive decisions.
-
-🗂 Logs
-The script redirects detailed output into:
-
-/var/log/vps-hardening/run-YYYYMMDD-HHMMSS.log
-
-Terminal output stays clean and user-focused.
+These decisions are left to the user as personal and security-sensitive choices.
 
 🖥 Supported systems
 Ubuntu 24.04 LTS
@@ -92,16 +74,14 @@ ssh.socket enabled
 
 fresh VPS installations
 
-================================================================================
-
 VPS Hardening Script (Ubuntu 24.04+)
-Интерактивный скрипт начальной настройки и базового харденинга свежего Ubuntu VPS.
+Интерактивный скрипт начальной настройки и базового харденига свежего Ubuntu VPS.
 
-Проект намеренно “консервативный”: без магии, без скрытых изменений и без необратимых шагов без явного подтверждения.
-Упор — на предсказуемое поведение, безопасный UX и повторяемость запусков.
+Проект намеренно консервативный: без “магии”, без скрытых шагов и без необратимых действий без явного подтверждения.
+Упор — на предсказуемое поведение, аккуратный UX и повторяемые прогоны.
 
 🚀 Быстрый старт
-Рекомендуется (скачать и запустить от root)
+Рекомендуемый способ (скачать и запустить от root)
 curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh \
   -o /tmp/hardening.sh && \
 chmod +x /tmp/hardening.sh && \
@@ -114,7 +94,7 @@ chmod +x hardening.sh
 sudo ./hardening.sh
 ✨ Возможности
 ✅ Интерактивный TUI (whiptail)
-Аккуратные окна, подтверждения и индикатор прогресса (без спама логами в терминал).
+Аккуратные диалоги, подтверждения и прогресс-бар (без спама логов в терминал).
 
 🔐 Настройка SSH
 
@@ -122,7 +102,7 @@ sudo ./hardening.sh
 
 Поддержка ssh.socket (systemd socket activation)
 
-Root-доступ и парольная аутентификация НЕ отключаются (по задумке)
+Root-доступ и парольная аутентификация НЕ отключаются (это специально)
 
 🔥 Firewall (UFW)
 
@@ -130,28 +110,27 @@ Root-доступ и парольная аутентификация НЕ отк
 
 Открываются только выбранные порты
 
-Явное подтверждение перед применением изменений
+Явное подтверждение перед применением правил
 
 🛡 Fail2Ban
 
-Включается для SSH
+Включён для SSH
 
-Автоматически настраивается на выбранный SSH-порт
+Автоматически использует выбранный SSH-порт
 
-♻️ Повторяемые запуски (stateful)
+♻️ Stateful-поведение
 
-Запоминает порты прошлого запуска
+Запоминает порты предыдущего запуска
 
-Показывает прошлые значения в начале
+Показывает прошлые значения при повторном запуске
 
-📊 Финальный runtime-отчёт (RUNTIME STATUS)
-В конце выводится:
+📊 Финальный runtime-отчёт
 
-какие порты слушает SSH
+Активные SSH-порты (listeners)
 
-текущие правила UFW
+Текущие правила UFW
 
-порт SSH в Fail2Ban
+Порт SSH в Fail2Ban
 
 🧩 Что скрипт намеренно НЕ делает
 ❌ НЕ управляет SSH-ключами (authorized_keys)
@@ -160,16 +139,9 @@ Root-доступ и парольная аутентификация НЕ отк
 
 ❌ НЕ отключает парольную аутентификацию
 
-❌ НЕ устанавливает прикладные сервисы (панели, прокси, 3x-ui и т.д.)
+❌ НЕ устанавливает прикладные сервисы (панели, прокси, 3x-ui и т. п.)
 
-Это оставлено пользователю как персональные и чувствительные к безопасности решения.
-
-🗂 Логи
-Подробный вывод уходит в лог:
-
-/var/log/vps-hardening/run-YYYYMMDD-HHMMSS.log
-
-А терминал остаётся чистым и “по делу”.
+Эти действия оставлены пользователю как персональные и чувствительные к безопасности решения.
 
 🖥 Поддерживаемые системы
 Ubuntu 24.04 LTS
