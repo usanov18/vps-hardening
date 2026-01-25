@@ -23,7 +23,8 @@ curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-harden
 chmod +x hardening.sh
 sudo ./hardening.sh
 ✨ Features
-✅ Interactive TUI (whiptail) — dialogs, confirmations, predictable UX
+✅ Interactive TUI (whiptail)
+Dialog windows, confirmations, predictable UX
 
 🔐 SSH hardening
 Custom SSH port selection
