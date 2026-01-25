@@ -1,94 +1,19 @@
-# VPS Hardening Script (Ubuntu 24.04+)
-
-Interactive bootstrap & basic hardening for a fresh Ubuntu VPS.
-
-This project is intentionally conservative: **no “magic”**, no hidden steps, and no irreversible actions without explicit confirmation.  
-The script focuses on predictable behavior, safe UX, and repeatable runs.
-
----
-
-## 🚀 Quick start
-
-### Recommended (download first, then run as root)
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh \
-  -o /tmp/hardening.sh && \
-chmod +x /tmp/hardening.sh && \
-sudo /tmp/hardening.sh
-Tip: run in a normal SSH session.
-The script is interactive (whiptail) and requires a TTY.
-
-Safer alternative (download to current directory)
-curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
-chmod +x hardening.sh
-sudo ./hardening.sh
-
-🔥 Firewall (UFW)
-
-Default: deny incoming / allow outgoing
-
-Opens only user-selected ports
-
-Explicit confirmation before applying rules
-
-🛡 Fail2Ban
-
-Enabled for SSH
-
-Automatically configured to the selected SSH port
-
-♻️ Stateful behavior
-
-Remembers ports from the previous run
-
-Shows previous selections on re-run
-
-📊 Final runtime summary
-
-SSH listening port(s)
-
-Active UFW rules
-
-Fail2Ban SSH jail port
-
-🧩 What this script intentionally does NOT do
-❌ Does NOT manage SSH keys (authorized_keys)
-
-❌ Does NOT disable root login
-
-❌ Does NOT disable password authentication
-
-❌ Does NOT install application stacks (panels, proxies, 3x-ui, etc.)
-
-These decisions are left to the user as personal and security-sensitive choices.
-
-🖥 Supported systems
-Ubuntu 24.04 LTS
-
-Tested with:
-
-systemd
-
-ssh.socket enabled
-
-fresh VPS installations
-
 VPS Hardening Script (Ubuntu 24.04+)
-Интерактивный скрипт начальной настройки и базового харденига свежего Ubuntu VPS.
+Интерактивный скрипт начальной настройки и базового харденинга свежего Ubuntu VPS.
 
-Проект намеренно консервативный: без “магии”, без скрытых шагов и без необратимых действий без явного подтверждения.
-Упор — на предсказуемое поведение, аккуратный UX и повторяемые прогоны.
+Проект намеренно консервативный: без "магии", без скрытых шагов и без необратимых действий без явного подтверждения. Упор — на предсказуемое поведение, аккуратный UX и повторяемые прогоны.
 
 🚀 Быстрый старт
 Рекомендуемый способ (скачать и запустить от root)
+bash
 curl -fsSL https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh \
   -o /tmp/hardening.sh && \
 chmod +x /tmp/hardening.sh && \
 sudo /tmp/hardening.sh
-Совет: запускай в обычной SSH-сессии. Скрипт интерактивный (whiptail) и требует TTY.
+Совет: запускайте в обычной SSH-сессии. Скрипт интерактивный (whiptail) и требует TTY.
 
 Более безопасный вариант (скачать в текущий каталог)
+bash
 curl -fsSL -o hardening.sh https://raw.githubusercontent.com/usanov18/vps-hardening/main/hardening.sh
 chmod +x hardening.sh
 sudo ./hardening.sh
@@ -97,7 +22,6 @@ sudo ./hardening.sh
 Аккуратные диалоги, подтверждения и прогресс-бар (без спама логов в терминал).
 
 🔐 Настройка SSH
-
 Выбор пользовательского SSH-порта
 
 Поддержка ssh.socket (systemd socket activation)
@@ -105,7 +29,6 @@ sudo ./hardening.sh
 Root-доступ и парольная аутентификация НЕ отключаются (это специально)
 
 🔥 Firewall (UFW)
-
 Политика: deny incoming / allow outgoing
 
 Открываются только выбранные порты
@@ -113,19 +36,16 @@ Root-доступ и парольная аутентификация НЕ отк
 Явное подтверждение перед применением правил
 
 🛡 Fail2Ban
-
 Включён для SSH
 
 Автоматически использует выбранный SSH-порт
 
 ♻️ Stateful-поведение
-
 Запоминает порты предыдущего запуска
 
 Показывает прошлые значения при повторном запуске
 
 📊 Финальный runtime-отчёт
-
 Активные SSH-порты (listeners)
 
 Текущие правила UFW
@@ -134,11 +54,8 @@ Root-доступ и парольная аутентификация НЕ отк
 
 🧩 Что скрипт намеренно НЕ делает
 ❌ НЕ управляет SSH-ключами (authorized_keys)
-
 ❌ НЕ отключает root-доступ
-
 ❌ НЕ отключает парольную аутентификацию
-
 ❌ НЕ устанавливает прикладные сервисы (панели, прокси, 3x-ui и т. п.)
 
 Эти действия оставлены пользователю как персональные и чувствительные к безопасности решения.
