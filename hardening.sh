@@ -2,7 +2,6 @@
 set -euo pipefail
 
 
-
 # trap-safety: ensure finalize_tui exists even if EXIT/ERR fires early
 finalize_tui() { :; }
 
@@ -86,6 +85,7 @@ on_exit() {
   if [[ $rc -eq 0 ]]; then
     if command -v say >/dev/null 2>&1; then
       say "==> DONE / ГОТОВО"
+
     else
       printf "\n==> DONE / ГОТОВО\n" >/dev/tty 2>/dev/null || true
     fi
@@ -245,7 +245,6 @@ bootstrap_tui() {
 has_tui() {
   command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
 }
-
 
 
 tui_init() {
@@ -417,7 +416,6 @@ gauge_update() {
 }
 
 
-
 gauge_stop() {
   [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
 
@@ -437,7 +435,6 @@ gauge_stop() {
   GAUGE_PID=""
   GAUGE_PATH=""
 }
-
 
 
 gauge_pause_for_dialog() {
@@ -461,7 +458,6 @@ gauge_resume_after_dialog() {
   # Restore last gauge state (best-effort)
   gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-}" || true
 }
-
 
 
 # ---------- port helpers ----------
@@ -938,7 +934,6 @@ checkpoint_optional_pause() {
   [[ "$ENABLE_TEST_PAUSE" == "yes" && "$SSH_PORT" != "22" ]] || return 0
 
 
-
   # If UFW is already active (e.g., firewall enabled before this script),
   # temporarily allow the NEW SSH port so the checkpoint test is meaningful.
   if ufw_is_active; then
@@ -1114,11 +1109,63 @@ main() {
 
   finalize_tui
 step "DONE / ГОТОВО"
-echo "==> DONE / ГОТОВО"
+
+  print_runtime_status
+
   warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
   warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
 
   tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
+}
+print_runtime_status() {
+  # печатаем строго в "консоль", а не в общий stdout (который у тебя залогирован)
+  local out_fd="${CONSOLE_FD:-}"
+  if [[ -z "${out_fd}" ]]; then
+    # fallback: если вдруг CONSOLE_FD пуст, пробуем TTY_DEV, иначе /dev/tty
+    if [[ -n "${TTY_DEV:-}" && -w "${TTY_DEV:-}" ]]; then
+      out_fd=""
+      exec 3>"${TTY_DEV}" || true
+      out_fd="3"
+    else
+      out_fd=""
+      exec 3>/dev/tty || true
+      out_fd="3"
+    fi
+  fi
+
+  {
+    printf "\n"
+    printf "============================================================\n"
+    printf "RUNTIME STATUS\n"
+    printf "============================================================\n\n"
+
+    printf "SSH / SSHD\n"
+    printf "SSH listening port(s):\n"
+    ss -lntp 2>/dev/null | awk '/sshd/ {print $4}' | sed 's/.*://g' | sort -u | sed 's/^/  - /' || printf "  - unknown\n"
+
+    printf "\nUFW\n"
+    printf "Allowed UFW rules:\n"
+    if command -v ufw >/dev/null 2>&1; then
+      ufw status numbered 2>/dev/null | sed '1d' | sed 's/^/  /' || printf "  UFW inactive\n"
+    else
+      printf "  UFW not installed\n"
+    fi
+
+    printf "\nFail2Ban (sshd)\n"
+    if [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
+      printf "sshd jail port:\n"
+      grep -E '^port' /etc/fail2ban/jail.d/sshd.local | sed 's/^/  /' || true
+    else
+      printf "  Fail2Ban SSH jail not configured\n"
+    fi
+
+    printf "\n============================================================\n"
+  } >&${out_fd}
+
+  # если мы открывали fd 3 сами — закроем
+  if [[ "${out_fd}" == "3" ]]; then
+    exec 3>&- || true
+  fi
 }
 
 # --- entrypoint ---
