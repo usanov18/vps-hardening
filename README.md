@@ -9,6 +9,10 @@ Full beginner guides are available in both languages:
 - English: [README.en.md](README.en.md)
 - Русский: [README.ru.md](README.ru.md)
 
+Windows local helper for SSH keys:
+
+- [generate-ssh-key.ps1](generate-ssh-key.ps1) creates a key pair or exports `.pub` and `.pub.txt` from an existing private key.
+
 ## Language
 
 | Document | Link |

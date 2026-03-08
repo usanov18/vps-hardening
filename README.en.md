@@ -58,6 +58,24 @@ If you do not have a key yet, create one on your own machine:
 ssh-keygen -t ed25519 -C "<label>"
 ```
 
+If you are on Windows and want a simpler flow, this repository also includes:
+
+```powershell
+.\generate-ssh-key.ps1
+```
+
+That helper can:
+
+- generate a new key pair in `%USERPROFILE%\.ssh`
+- create a `.pub.txt` copy next to the key for easy copy-paste
+- export `.pub` and `.pub.txt` from an existing private key
+
+Example for an existing private key:
+
+```powershell
+.\generate-ssh-key.ps1 -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
+```
+
 ## Quick Start
 
 ```bash
@@ -92,6 +110,14 @@ chmod +x hardening.sh
 ```bash
 sudo ./hardening.sh
 ```
+
+If you are on Windows and still need an SSH key before step 4, open a local PowerShell window on your own computer and run:
+
+```powershell
+.\generate-ssh-key.ps1
+```
+
+Then open the generated `.pub.txt` file from `%USERPROFILE%\.ssh` and paste its contents into the server prompt.
 
 ### 4. Answer the prompts
 

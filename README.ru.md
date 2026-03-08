@@ -58,6 +58,24 @@ Terminal-first bootstrap и hardening для свежего Ubuntu VPS.
 ssh-keygen -t ed25519 -C "<label>"
 ```
 
+Если ты на Windows и хочешь более простой сценарий, в репозитории есть helper:
+
+```powershell
+.\generate-ssh-key.ps1
+```
+
+Он умеет:
+
+- сгенерировать новую пару ключей в `%USERPROFILE%\.ssh`
+- положить рядом `.pub.txt` для удобной вставки в серверный prompt
+- достать `.pub` и `.pub.txt` из уже существующего private key
+
+Пример для уже существующего private key:
+
+```powershell
+.\generate-ssh-key.ps1 -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
+```
+
 ## Быстрый Старт
 
 ```bash
@@ -92,6 +110,14 @@ chmod +x hardening.sh
 ```bash
 sudo ./hardening.sh
 ```
+
+Если ты на Windows и к шагу 4 у тебя ещё нет SSH-ключа, открой локальный PowerShell на своём компьютере и выполни:
+
+```powershell
+.\generate-ssh-key.ps1
+```
+
+После этого открой созданный `.pub.txt` в `%USERPROFILE%\.ssh` и вставь его содержимое в prompt на сервере.
 
 ### 4. Ответь на вопросы скрипта
 
