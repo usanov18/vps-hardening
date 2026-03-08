@@ -1,468 +1,429 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-
-# trap-safety: ensure finalize_tui exists even if EXIT/ERR fires early
-finalize_tui() { :; }
-
 TTY_DEV="/dev/tty"
 
+LOG_DIR="/var/log/vps-hardening"
+STATE_DIR="/etc/vps-hardening"
+STATE_FILE="${STATE_DIR}/last-config.conf"
 
-# graceful Ctrl+C handling (keeps TUI clean)
-INTERRUPTED="no"
-on_int() {
-  INTERRUPTED="yes"
-  # best-effort restore (do NOT assume gauge exists)
-  gauge_stop 2>/dev/null || true
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
-  tput rmcup 2>/dev/null || true
-  printf "\n[INTERRUPTED] Stopped by user (Ctrl+C)\n" >&2
-  exit 130
-}
-trap 'on_int' INT
+SSHD_DROPIN="/etc/ssh/sshd_config.d/90-vps-hardening.conf"
+SSH_SOCKET_DROPIN="/etc/systemd/system/ssh.socket.d/override.conf"
+FAIL2BAN_DROPIN="/etc/fail2ban/jail.d/10-vps-hardening.local"
+SYSCTL_DROPIN="/etc/sysctl.d/99-vps-hardening-net.conf"
+SYSCTL_BACKUP_ROOT="${STATE_DIR}/sysctl-backups"
+SYSCTL_BASELINE_FILE="${STATE_DIR}/network-sysctl-baseline.conf"
 
-# ============================================================
-# VPS HARDENING SCRIPT (Ubuntu 24+)
-#
-# 🇷🇺 Назначение:
-#  - Обновление системы (apt update + безопасный upgrade)
-#  - Установка и настройка: UFW, Fail2Ban
-#  - Базовая настройка SSH: выбор порта
-#  - Установка базовых утилит (git, jq, unzip, htop, nano)
-#  - (UX) TUI (whiptail): аккуратные окна + прогресс
-#  - (UX) State: показываем порты из прошлого запуска
-#  - (Fix) /run/sshd перед sshd -t (tmpfs /run)
-#  - (Fix) Поддержка ssh.socket (socket activation) без "мостика" 22
-#
-# 🇬🇧 Purpose:
-#  - System update (apt update + safe upgrade)
-#  - Install & configure: UFW, Fail2Ban
-#  - Basic SSH setup: choose SSH port
-#  - Install helpful tools (git, jq, unzip, htop, nano)
-#  - (UX) TUI (whiptail): clean dialogs + progress
-#  - (UX) State: show ports from previous run
-#  - (Fix) Ensure /run/sshd exists before sshd -t
-#  - (Fix) ssh.socket support (socket activation) without port-22 bridge
-# ============================================================
+LOG_FILE=""
+CONSOLE_FD=""
+CURRENT_STEP="startup"
 
-# ---------- output helpers ----------
-tui_cleanup() {
-  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  : # no clear here
-}
+SSH_PORT="22"
+ALLOW_TCP_PORTS=""
+ALLOW_UDP_PORTS=""
+ADMIN_USER=""
+COPY_ROOT_KEYS="no"
+COPY_SUDO_USER_KEYS="no"
+PASTED_PUBLIC_KEY=""
+STRICT_SSH_HARDENING="no"
+ADMIN_KEYS_READY="no"
+SSH_TEST_CONFIRMED="no"
+ENABLE_NETWORK_TUNING="yes"
+ENABLE_IP_FORWARD="yes"
+PRIMARY_IP=""
+PREV_SSH_PORT=""
+SYSCTL_BACKUP_DIR=""
 
-cleanup_all() {
-  # stop gauge if running, then restore tty (best-effort)
-  gauge_stop 2>/dev/null || true
-
-  # Leave whiptail/alternate screen if it was used
-  tput rmcup 2>/dev/null || true
-  stty sane <"$TTY_DEV" 2>/dev/null || true
-  tput cnorm <"$TTY_DEV" 2>/dev/null || true
-
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
-
-  # Do NOT "clear" here: it erases the final output.
-  # Instead, just clean the current line and move to a fresh prompt line.
-  if [[ -n "${CONSOLE_FD:-}" ]]; then
-    printf '\r\033[K\n' >&"$CONSOLE_FD" 2>/dev/null || true
-  else
-    printf '\r\033[K\n' >/dev/tty 2>/dev/null || true
-  fi
-}
-
-on_exit() {
-  local rc=$?
-  cleanup_all || true
-
-  # Print DONE to the real console (stdout is redirected to logfile)
-  if [[ $rc -eq 0 ]]; then
-    if command -v say >/dev/null 2>&1; then
-      say "==> DONE / ГОТОВО"
-
-    else
-      printf "\n==> DONE / ГОТОВО\n" >/dev/tty 2>/dev/null || true
-    fi
-  fi
-}
-
-
-tui_cleanup() {
-  # Best-effort terminal restore after whiptail <"$TTY_DEV" >"$TTY_DEV" / gauge / abrupt exits
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  : # no clear here
-}
-
-log()  { echo "[$(date -Is)] $*"; }
-warn() { echo "[$(date -Is)] [WARNING] $*" >&2; }
-step() { echo; echo "========== $* =========="; }
-die()  { cleanup_all || true; echo "ERROR: $*" >&2; exit 1; }
-CURRENT_STEP="(starting)"
-trap 'tui_cleanup || true; echo "ERROR: Script failed during step: ${CURRENT_STEP}. Check output above." >&2; exit 1' ERR
-trap 'rc=$?; cleanup_all || true; if [[ $rc -eq 0 && "${INTERRUPTED:-no}" != "yes" ]]; then printf "
-==> DONE / ГОТОВО
-"; fi' EXIT
 require_root() {
-  [[ $EUID -eq 0 ]] || die "Run as root (use: sudo bash hardening.sh)"
+  [[ ${EUID} -eq 0 ]] || { echo "Run as root. / Запусти от root." >&2; exit 1; }
 }
 
-# ---------- tty helpers (curl | bash safe input + whiptail) ----------
 tty_available() {
-  [[ -r /dev/tty && -w /dev/tty ]]
+  [[ -r "${TTY_DEV}" && -w "${TTY_DEV}" ]]
 }
 
 tty_require() {
-  tty_available || die "No TTY available for interactive input. Run in a real terminal (SSH session)."
+  tty_available || { echo "A real terminal is required. / Нужен реальный терминал." >&2; exit 1; }
 }
-
-tty_readline() {
-  local prompt="$1"
-  local default="${2:-}"
-  local out=""
-
-  if [[ -t 0 ]]; then
-    read -r -p "$prompt" out
-  else
-    tty_require
-    read -r -p "$prompt" out </dev/tty
-  fi
-
-  echo "${out:-$default}"
-}
-
-tty_yesno_prompt() {
-  local prompt="$1"
-  local ans=""
-
-  if [[ -t 0 ]]; then
-    read -r -p "$prompt" ans
-  else
-    tty_require
-    read -r -p "$prompt" ans </dev/tty
-  fi
-
-  [[ "${ans:-n}" =~ ^[yY]$ ]]
-}
-
-
-# ---------- logging / UX: keep terminal clean, write heavy output to logfile ----------
-LOG_DIR="/var/log/vps-hardening"
-LOG_FILE=""
-CONSOLE_FD=""
 
 console_init() {
-  mkdir -p "$LOG_DIR"
-  chmod 750 "$LOG_DIR" || true
+  mkdir -p "${LOG_DIR}"
+  chmod 750 "${LOG_DIR}" || true
 
   LOG_FILE="${LOG_DIR}/run-$(date +%Y%m%d-%H%M%S).log"
-  touch "$LOG_FILE"
-  chmod 600 "$LOG_FILE" || true
+  touch "${LOG_FILE}"
+  chmod 600 "${LOG_FILE}" || true
 
-  # Preserve original stderr for user-visible output
   exec {CONSOLE_FD}>&2
-
-  # Prefer real TTY if available
   if tty_available; then
     exec {CONSOLE_FD}>/dev/tty
   fi
 
-  # Redirect all stdout/stderr to logfile
-  exec >>"$LOG_FILE" 2>&1
-
-  # --- safety: never silence stdout/stderr ---
-  # Keep console output sane without forcing logs to /dev/tty.
-
-  # Only use CONSOLE_FD redirections if CONSOLE_FD is a valid integer fd
-  if [[ -n "${CONSOLE_FD:-}" && "${CONSOLE_FD}" =~ ^[0-9]+$ ]]; then
-    : # CONSOLE_FD is valid
-  else
-    CONSOLE_FD=""
-  fi
-
+  exec >>"${LOG_FILE}" 2>&1
 }
 
-say() { printf '%s\n' "$*" >&"$CONSOLE_FD"; }
+say() {
+  printf '%s\n' "$*" >&"${CONSOLE_FD}"
+}
 
-die() {
-  say "ERROR: $*"
-  say "Log: ${LOG_FILE:-/var/log/vps-hardening/...}"
-  echo "ERROR: $*" >&2
-  exit 1
+say_blank() {
+  printf '\n' >&"${CONSOLE_FD}"
+}
+
+log() {
+  printf '[%s] %s\n' "$(date -Is)" "$*"
 }
 
 step() {
-  echo
-  echo "========== $* =========="
-  say "==> $*"
+  CURRENT_STEP="$1"
+  say_blank
+  say "==> ${CURRENT_STEP}"
+  log "STEP: ${CURRENT_STEP}"
 }
 
-
-# ---------- state ----------
-STATE_DIR="/etc/vps-hardening"
-STATE_FILE="${STATE_DIR}/last-ports.conf"
-
-# ---------- defaults ----------
-SSH_PORT_DEFAULT="22"
-PANEL_PORT_DEFAULT="8443"
-INBOUND_PORT_DEFAULT="443"
-
-SSH_PORT=""
-PANEL_PORT=""
-INBOUND_PORT=""
-
-ENABLE_UFW="yes"
-
-# 🇷🇺 Опциональная пауза перед UFW, чтобы пользователь проверил вход по НОВОМУ SSH порту
-# 🇬🇧 Optional pause before enabling UFW so user can test SSH on the NEW port
-ENABLE_TEST_PAUSE="yes"
-
-# User confirmed SSH login works on the NEW port during checkpoint
-SSH_TEST_CONFIRMED="no"
-
-# ---------- TUI helpers (whiptail) ----------
-TUI_ENABLED="false"
-GAUGE_FD=""
-GAUGE_PATH=""
-GAUGE_PID=""
-GAUGE_LAST_PCT="0"
-GAUGE_LAST_MSG="Starting..."
-
-bootstrap_tui() {
-  command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && return 0
-  tty_available || return 0
-  warn "Bootstrapping UI (installing whiptail)..."
-  apt-get update -y
-  apt-get install -y whiptail
+warn_user() {
+  say "Warning / Внимание: $*"
+  log "WARNING: $*"
 }
 
-has_tui() {
-  command -v whiptail <"$TTY_DEV" >"$TTY_DEV" >/dev/null 2>&1 && tty_available && [[ -n "${TERM:-}" ]]
+die() {
+  log "ERROR: $*"
+  say_blank
+  say "Error / Ошибка: $*"
+  exit 1
 }
 
+on_exit() {
+  local rc=$?
 
-tui_init() {
-  if has_tui; then
-    TUI_ENABLED="true"
+  if [[ -z "${CONSOLE_FD:-}" ]]; then
+    return
   fi
-}
 
-tui_msg() {
-  gauge_pause_for_dialog || true
-  local title="$1"
-  local msg="$2"
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    local term="${TERM:-xterm}"
-    local rc=0
-    set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --msgbox "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
-    rc=$?
-    set -e
-    if [[ "$rc" != "0" ]]; then
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" msgbox failed (rc=$rc), falling back to text output"
-      TUI_ENABLED="false"
-      echo "$title: $msg" >&2
-    fi
+  say_blank
+  if [[ ${rc} -eq 0 ]]; then
+    say "Completed. / Готово."
+  elif [[ ${rc} -eq 130 ]]; then
+    say "Stopped by user. / Остановлено пользователем."
   else
-    echo "$title: $msg" >&2
+    say "Failed during / Ошибка на шаге: ${CURRENT_STEP}"
   fi
-  gauge_resume_after_dialog || true
-}
-tui_info() {
-  local title="$1"
-  local msg="$2"
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    local term="${TERM:-xterm}"
-    local rc=0
-    set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --infobox "$msg" 10 76 </dev/tty >/dev/tty 2>/dev/tty
-    rc=$?
-    set -e
-    if [[ "$rc" != "0" ]]; then
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" infobox failed (rc=$rc), falling back to text output"
-      TUI_ENABLED="false"
-      echo "$title: $msg" >&2
-    fi
-  else
-    echo "$title: $msg" >&2
-  fi
+  say "Log / Лог: ${LOG_FILE:-/var/log/vps-hardening/...}"
 }
 
-
-tui_yesno() {
-  gauge_pause_for_dialog || true
-  local title="$1"
-  local msg="$2"
-
-  # Try whiptail <"$TTY_DEV" >"$TTY_DEV" first, but NEVER die on whiptail <"$TTY_DEV" >"$TTY_DEV" issues under curl|bash.
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    local term="${TERM:-xterm}"
-    local rc=0
-
-    set +e
-    TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --yesno "$msg" 16 76 </dev/tty >/dev/tty 2>/dev/tty
-    rc=$?
-    set -e
-
-    # whiptail <"$TTY_DEV" >"$TTY_DEV" returns: 0=yes, 1=no. Anything else = broken environment -> fallback.
-    if [[ "$rc" == "0" ]]; then return 0; fi
-    if [[ "$rc" == "1" ]]; then return 1; fi
-
-    warn "whiptail <"$TTY_DEV" >"$TTY_DEV" failed (rc=$rc), falling back to text prompt via /dev/tty"
-    TUI_ENABLED="false"
-  fi
-
-  tty_yesno_prompt "$msg (y/n) [n]: "
-  gauge_resume_after_dialog || true
+on_int() {
+  exit 130
 }
-tui_input() {
-  gauge_pause_for_dialog || true
-  local title="$1"
-  local msg="$2"
-  local default="$3"
-  local out=""
-  local rc=0
-  local tmp=""
 
-  if [[ "$TUI_ENABLED" == "true" ]]; then
-    local term="${TERM:-xterm}"
+trim() {
+  local value="$1"
+  value="${value#"${value%%[![:space:]]*}"}"
+  value="${value%"${value##*[![:space:]]}"}"
+  printf '%s' "${value}"
+}
 
-    tmp="$(mktemp -t vps-hardening-input.XXXXXX)" || tmp=""
-    if [[ -z "$tmp" ]]; then
-      warn "mktemp failed, falling back to text prompt via /dev/tty"
-      TUI_ENABLED="false"
+prompt_line() {
+  local prompt="$1"
+  local default="${2:-}"
+  local allow_blank="${3:-no}"
+  local answer=""
+
+  while true; do
+    if [[ -n "${default}" ]]; then
+      printf '%s [%s]: ' "${prompt}" "${default}" >"${TTY_DEV}"
     else
-      set +e
-      TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "$title" --inputbox "$msg" 10 76 "$default" \
-        --output-fd 3 \
-        </dev/tty 1>/dev/tty 2>/dev/tty 3>"$tmp"
-      rc=$?
-      set -e
-
-      if [[ "$rc" == "0" ]]; then
-        # Some environments may write value twice; take first non-empty line.
-        out="$(awk 'NF{print; exit}' "$tmp" 2>/dev/null || true)"
-        rm -f "$tmp" 2>/dev/null || true
-        out="${out//$'
-'/}"
-        out="$(printf '%s' "$out" | xargs)"
-        printf '%s
-' "$out"
-  gauge_resume_after_dialog || true
-  return 0
-      fi
-
-      rm -f "$tmp" 2>/dev/null || true
-
-      if [[ "$rc" == "1" ]]; then
-  gauge_resume_after_dialog || true
-  return 1
-      fi
-
-      warn "whiptail <"$TTY_DEV" >"$TTY_DEV" inputbox failed (rc=$rc), falling back to text prompt via /dev/tty"
-      TUI_ENABLED="false"
+      printf '%s: ' "${prompt}" >"${TTY_DEV}"
     fi
+
+    IFS= read -r answer <"${TTY_DEV}" || exit 130
+    answer="$(trim "${answer}")"
+
+    if [[ -n "${answer}" ]]; then
+      printf '%s\n' "${answer}"
+      return 0
+    fi
+
+    if [[ "${allow_blank}" == "yes" ]]; then
+      printf '\n'
+      return 0
+    fi
+
+    if [[ -n "${default}" ]]; then
+      printf '%s\n' "${default}"
+      return 0
+    fi
+  done
+}
+
+prompt_yesno() {
+  local prompt="$1"
+  local default="${2:-yes}"
+  local suffix=""
+  local answer=""
+
+  if [[ "${default}" == "yes" ]]; then
+    suffix="[Y/n]"
+  else
+    suffix="[y/N]"
   fi
 
-  out="$(tty_readline "$msg [$default]: " "$default")"
-  out="${out//$'
-'/}"
-  out="$(printf '%s' "$out" | xargs)"
-  printf '%s
-' "$out"
-  gauge_resume_after_dialog || true
-}
-gauge_start() {
-  [[ "$TUI_ENABLED" == "true" ]] || return 0
+  while true; do
+    printf '%s %s: ' "${prompt}" "${suffix}" >"${TTY_DEV}"
+    IFS= read -r answer <"${TTY_DEV}" || exit 130
+    answer="$(trim "${answer}")"
+    answer="${answer,,}"
 
-  local term="${TERM:-xterm}"
+    if [[ -z "${answer}" ]]; then
+      [[ "${default}" == "yes" ]] && return 0
+      return 1
+    fi
 
-  GAUGE_PATH="/tmp/vps-hardening-gauge.$$"
-  mkfifo "$GAUGE_PATH"
-
-  set +e
-  TERM="$term" whiptail <"$TTY_DEV" >"$TTY_DEV" --clear --title "VPS Hardening" --gauge "Starting..." 10 76 0 \
-    <"$GAUGE_PATH" >/dev/tty 2>/dev/tty &
-  set -e
-
-  GAUGE_PID="$!"
-  exec {GAUGE_FD}<>"$GAUGE_PATH"
+    case "${answer}" in
+      y|yes|д|да) return 0 ;;
+      n|no|н|нет) return 1 ;;
+    esac
+  done
 }
 
-
-gauge_update() {
-  local pct="${1:-0}"
-  local msg="${2:-}"
-
-  GAUGE_LAST_PCT="$pct"
-  GAUGE_LAST_MSG="$msg"
-
-  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
-  [[ -n "${GAUGE_FD:-}" ]] || return 0
-  { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
-
-  {
-    echo "XXX"
-    echo "$pct"
-    echo "$msg"
-    echo "XXX"
-  } >&"$GAUGE_FD" 2>/dev/null || true
-}
-
-
-gauge_stop() {
-  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
-
-  gauge_update 100 "Done." || true
-
-  if [[ -n "${GAUGE_FD:-}" ]]; then
-    exec {GAUGE_FD}>&- 2>/dev/null || true
-  fi
-
-  if [[ -n "${GAUGE_PID:-}" ]]; then
-    wait "$GAUGE_PID" 2>/dev/null || true
-  fi
-
-  rm -f "${GAUGE_PATH:-}" 2>/dev/null || true
-
-  GAUGE_FD=""
-  GAUGE_PID=""
-  GAUGE_PATH=""
-}
-
-
-gauge_pause_for_dialog() {
-  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
-  [[ -n "${GAUGE_FD:-}" ]] || return 0
-  { : >&"$GAUGE_FD"; } 2>/dev/null || return 0
-
-  # Temporarily stop feeding gauge while showing dialogs
-  exec {GAUGE_FD}>&- 2>/dev/null || true
-}
-
-
-gauge_resume_after_dialog() {
-  [[ "${TUI_ENABLED:-false}" == "true" ]] || return 0
-  [[ -n "${GAUGE_PATH:-}" ]] || return 0
-  [[ -p "${GAUGE_PATH}" ]] || return 0
-
-  # Re-open FIFO writer end; if gauge already gone, stay silent.
-  exec {GAUGE_FD}<>"${GAUGE_PATH}" 2>/dev/null || { GAUGE_FD=""; return 0; }
-
-  # Restore last gauge state (best-effort)
-  gauge_update "${GAUGE_LAST_PCT:-0}" "${GAUGE_LAST_MSG:-}" || true
-}
-
-
-# ---------- port helpers ----------
 is_valid_port() {
   [[ "$1" =~ ^[0-9]+$ ]] && (( $1 >= 1 && $1 <= 65535 ))
+}
+
+prompt_port() {
+  local prompt="$1"
+  local default="$2"
+  local value=""
+
+  while true; do
+    value="$(prompt_line "${prompt}" "${default}")"
+    if is_valid_port "${value}"; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+    say "Use a port in range 1..65535. / Нужен порт в диапазоне 1..65535."
+  done
+}
+
+normalize_port_specs() {
+  local input="$1"
+  local prepared=""
+  local token=""
+  local start=""
+  local end=""
+  local normalized=""
+  local -A seen=()
+  local parts=()
+
+  input="$(trim "${input}")"
+  [[ -z "${input}" ]] && return 0
+
+  prepared="${input//;/,}"
+  prepared="${prepared// /,}"
+  prepared="${prepared//$'\t'/,}"
+
+  IFS=',' read -r -a parts <<< "${prepared}"
+
+  for token in "${parts[@]}"; do
+    token="$(trim "${token}")"
+    [[ -z "${token}" ]] && continue
+
+    if [[ "${token}" =~ ^([0-9]+)-([0-9]+)$ ]]; then
+      start="${BASH_REMATCH[1]}"
+      end="${BASH_REMATCH[2]}"
+      is_valid_port "${start}" || return 1
+      is_valid_port "${end}" || return 1
+      (( start <= end )) || return 1
+      token="${start}-${end}"
+    elif is_valid_port "${token}"; then
+      :
+    else
+      return 1
+    fi
+
+    if [[ -z "${seen[${token}]:-}" ]]; then
+      seen["${token}"]="1"
+      if [[ -n "${normalized}" ]]; then
+        normalized+=","
+      fi
+      normalized+="${token}"
+    fi
+  done
+
+  printf '%s\n' "${normalized}"
+}
+
+prompt_port_specs() {
+  local prompt="$1"
+  local default="${2:-}"
+  local value=""
+  local normalized=""
+
+  while true; do
+    if [[ -n "${default}" ]]; then
+      value="$(prompt_line "${prompt}" "${default}")"
+    else
+      value="$(prompt_line "${prompt}" "${default}" "yes")"
+    fi
+    value="$(trim "${value}")"
+
+    case "${value,,}" in
+      none|off|-) value="" ;;
+    esac
+
+    if [[ -z "${value}" ]]; then
+      printf '\n'
+      return 0
+    fi
+
+    if normalized="$(normalize_port_specs "${value}")"; then
+      printf '%s\n' "${normalized}"
+      return 0
+    fi
+
+    say "Use a comma-separated list like 443,8443 or a range like 10000-10100. / Используй список 443,8443 или диапазон 10000-10100."
+  done
+}
+
+valid_username() {
+  [[ "$1" =~ ^[a-z_][a-z0-9_-]*[$]?$ ]]
+}
+
+prompt_username() {
+  local prompt="$1"
+  local default="$2"
+  local value=""
+
+  while true; do
+    value="$(prompt_line "${prompt}" "${default}")"
+    if valid_username "${value}" && [[ "${value}" != "root" ]]; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+    say "Use a Linux-style username, not root. / Имя должно быть в Linux-стиле и не root."
+  done
+}
+
+valid_public_key() {
+  [[ "$1" =~ ^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp[0-9]+|sk-ecdsa-sha2-nistp256@openssh\.com|sk-ssh-ed25519@openssh\.com)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]]
+}
+
+show_public_key_help() {
+  say "SSH key / SSH-ключ:"
+  say "  Public key only (.pub). Только public key (.pub)."
+  say "  Private key stays on your machine. Приватный ключ остаётся у тебя."
+  say "  Next prompt expects one line from a .pub file. Следующий prompt ждёт одну строку из .pub."
+  say "  Linux/macOS: ~/.ssh/id_ed25519 and ~/.ssh/id_ed25519.pub"
+  say "  Windows: %USERPROFILE%\\.ssh\\id_ed25519 and id_ed25519.pub"
+  say "  Generate locally if needed: ssh-keygen -t ed25519 -C \"<label>\""
+}
+
+show_network_tuning_help() {
+  say "Network tuning / Сетевой профиль:"
+  say "  Adds BBR + fq, larger TCP buffers and backlog tuning."
+  say "  Добавляет BBR + fq, увеличенные TCP-буферы и backlog-настройки."
+  say "  Also tunes keepalive, tcp_fastopen, tcp_mtu_probing and dead-path retries."
+  say "  Также настраивает keepalive, tcp_fastopen, tcp_mtu_probing и retries."
+  say "  Useful for proxies, tunnels and high-throughput servers."
+  say "  Полезно для proxy, tunnel и нагруженных серверов."
+  say "  Common sysctl files are backed up before apply."
+  say "  Перед применением делается backup известных sysctl-конфигов."
+}
+
+prompt_public_key() {
+  local prompt="$1"
+  local value=""
+
+  while true; do
+    printf '%s\n' "${prompt}" >"${TTY_DEV}"
+    printf '%s' '> ' >"${TTY_DEV}"
+    IFS= read -r value <"${TTY_DEV}" || exit 130
+    value="$(trim "${value}")"
+
+    if [[ -z "${value}" ]]; then
+      printf '\n'
+      return 0
+    fi
+
+    if valid_public_key "${value}"; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+
+    say "That does not look like a valid SSH public key. / Похоже, это невалидный SSH public key."
+  done
+}
+
+csv_or_none() {
+  local value="$1"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+  else
+    printf 'none / нет'
+  fi
+}
+
+bool_or_no() {
+  local value="$1"
+  if [[ "${value}" == "yes" ]]; then
+    printf 'yes / да'
+  else
+    printf 'no / нет'
+  fi
+}
+
+value_or_none() {
+  local value="$1"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+  else
+    printf 'none / нет'
+  fi
+}
+
+state_set_if_present() {
+  local value="$1"
+  local fallback="$2"
+  if [[ -n "${value}" ]]; then
+    printf '%s\n' "${value}"
+  else
+    printf '%s\n' "${fallback}"
+  fi
+}
+
+load_state() {
+  local key=""
+  local value=""
+
+  [[ -f "${STATE_FILE}" ]] || return 0
+
+  while IFS='=' read -r key value; do
+    value="$(trim "${value}")"
+    case "${key}" in
+      SSH_PORT) SSH_PORT="${value}" ;;
+      ALLOW_TCP_PORTS) ALLOW_TCP_PORTS="${value}" ;;
+      ALLOW_UDP_PORTS) ALLOW_UDP_PORTS="${value}" ;;
+      ADMIN_USER) ADMIN_USER="${value}" ;;
+      ENABLE_NETWORK_TUNING) ENABLE_NETWORK_TUNING="${value}" ;;
+      ENABLE_IP_FORWARD) ENABLE_IP_FORWARD="${value}" ;;
+    esac
+  done < "${STATE_FILE}"
+}
+
+save_state() {
+  mkdir -p "${STATE_DIR}"
+  cat > "${STATE_FILE}" <<EOF
+SSH_PORT=${SSH_PORT}
+ALLOW_TCP_PORTS=${ALLOW_TCP_PORTS}
+ALLOW_UDP_PORTS=${ALLOW_UDP_PORTS}
+ADMIN_USER=${ADMIN_USER}
+ENABLE_NETWORK_TUNING=${ENABLE_NETWORK_TUNING}
+ENABLE_IP_FORWARD=${ENABLE_IP_FORWARD}
+EOF
+  chmod 600 "${STATE_FILE}"
+}
+
+guess_primary_ip() {
+  hostname -I 2>/dev/null | awk '{print $1}'
 }
 
 port_has_tcp_listener() {
@@ -470,722 +431,904 @@ port_has_tcp_listener() {
   ss -lnt "sport = :${port}" 2>/dev/null | tail -n +2 | grep -q LISTEN
 }
 
-port_tcp_listener_is_sshd() {
+get_port_listeners() {
   local port="$1"
-  ss -lntp "sport = :${port}" 2>/dev/null | grep -q '"sshd"'
+  ss -lntpH "sport = :${port}" 2>/dev/null || true
 }
 
-
-# Returns TCP LISTEN lines for a given port (best-effort; may be empty).
-get_tcp_listeners_for_port() {
+port_listener_is_sshd() {
   local port="$1"
-  ss -lntpH 2>/dev/null | awk -v p=":${port}" '$1=="LISTEN" && $4 ~ (p"$") {print}' || true
+  get_port_listeners "${port}" | grep -q 'sshd'
 }
 
-tcp_port_is_listening() {
-  local port="$1"
-  get_tcp_listeners_for_port "$port" | grep -q '.'
-}
-
-port_is_duplicate() {
-  local candidate="$1"; shift
-  local p
-  for p in "$@"; do
-    [[ -n "$p" && "$candidate" == "$p" ]] && return 0
-  done
-  return 1
-}
-ask_port_loop() {
-  local title="$1"
-  local prompt="$2"
-  local default="$3"
-  local val=""
+prompt_ssh_port() {
+  local default="$1"
+  local value=""
+  local listeners=""
 
   while true; do
-    # NOTE: tui_input returns non-zero on Cancel
-    if ! val="$(tui_input "$title" "$prompt" "$default")"; then
-      return 1
-    fi
+    value="$(prompt_port "SSH port / SSH-порт" "${default}")"
 
-    # sanitize: drop CR, trim whitespace
-    val="${val//$'
-'/}"
-    val="$(printf '%s' "$val" | xargs)"
-
-    if [[ -z "$val" ]]; then
-      tui_msg "$title" "Empty input. Please enter a port number (1..65535)."
-      continue
-    fi
-
-    if is_valid_port "$val"; then
-      # If port is already listening, handle it safely.
-      if port_has_tcp_listener "$val"; then
-# SSH re-run fast path: accept current SSH port if sshd is listening
-if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "${val}"; then
-  tui_msg "SSH port already active / SSH уже активен" \
-    "🇷🇺 Порт ${val} уже используется SSH (sshd). Это нормально при повторном запуске.\n\nПродолжаю с этим портом.\n\n🇬🇧 Port ${val} is already used by SSH (sshd). This is normal on re-runs.\n\nContinuing with this port."
-  printf '%s\n' "${val}"
-  return 0
-fi
-
-        # If sshd is already listening here, it's typically OK (re-run / selecting current SSH port).
-        if [[ "$title" == "SSH Port" ]] && port_tcp_listener_is_sshd "$val"; then
-          gauge_pause_for_dialog || true
-          if tui_yesno "SSH port already active / SSH уже активен" \
-            "🇷🇺 Порт $val уже слушается SSH (sshd). Это нормально при повторном запуске.\n\nИспользовать этот порт снова?\n\n🇬🇧 Port $val is already used by SSH (sshd). This is normal on re-runs.\n\nUse this port again?"; then
-            gauge_resume_after_dialog || true
-            # accept $val as-is
-            :
-          else
-            gauge_resume_after_dialog || true
-            continue
-          fi
-        else
-          gauge_pause_for_dialog || true
-          if ! tui_yesno "Port in use / Порт занят" \
-            "🇷🇺 Порт $val уже занят другим сервисом (TCP LISTEN).\n      Нужно выбрать другой порт.\n\n      Нажми Yes — выбрать другой.\nНажми No — отмена (скрипт остановится).\n\n      🇬🇧 Port $val is already in use by another service (TCP LISTEN).\n      You must choose another port.\n\n      Press Yes to choose another.\nPress No to cancel (script will stop)."; then
-            gauge_resume_after_dialog || true
-            die "Aborted by user during port selection."
-          fi
-          gauge_resume_after_dialog || true
-          continue
-        fi
-      fi
-      printf '%s
-' "$val"
+    if ! port_has_tcp_listener "${value}"; then
+      printf '%s\n' "${value}"
       return 0
     fi
 
-    tui_msg "$title" "Invalid port: $val. Please enter 1..65535."
-  done
-}
-ask_unique_port_loop() {
-  local title="$1"
-  local prompt="$2"
-  local default="$3"
-  shift 3
-  local existing=("$@")
-  local val=""
-  while true; do
-    val="$(ask_port_loop "$title" "$prompt" "$default")" || return 1
-    if port_is_duplicate "$val" "${existing[@]}"; then
-      tui_msg "$title" "🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.\n\n🇬🇧 🇷🇺 Этот порт уже выбран в другом поле. Выбери другой.
-
-🇬🇧 This port is already used by another selection. Choose a different one."
-      continue
+    if [[ "${value}" == "${default}" ]] && port_listener_is_sshd "${value}"; then
+      say "SSH already listens on port ${value}. Reusing it. / SSH уже слушает порт ${value}, оставляю его."
+      printf '%s\n' "${value}"
+      return 0
     fi
-    echo "$val"; return 0
+
+    listeners="$(get_port_listeners "${value}" | head -n 6)"
+    say "Port ${value} is already in use. / Порт ${value} уже занят:"
+    if [[ -n "${listeners}" ]]; then
+      while IFS= read -r line; do
+        say "  ${line}"
+      done <<< "${listeners}"
+    fi
+
+    if prompt_yesno "Use this port anyway? / Использовать всё равно?" "no"; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
   done
 }
 
-# ---------- state load/save ----------
-load_last_ports() {
-  if [[ -f "$STATE_FILE" ]]; then
-    # shellcheck disable=SC1090
-    source "$STATE_FILE" || true
+user_exists() {
+  id -u "$1" >/dev/null 2>&1
+}
+
+get_user_home() {
+  getent passwd "$1" | awk -F: '{print $6}'
+}
+
+user_has_authorized_keys() {
+  local user="$1"
+  local home=""
+
+  user_exists "${user}" || return 1
+  home="$(get_user_home "${user}")"
+  [[ -n "${home}" && -s "${home}/.ssh/authorized_keys" ]]
+}
+
+sudo_user_keys_path() {
+  local user="${SUDO_USER:-}"
+  local home=""
+
+  [[ -n "${user}" && "${user}" != "root" ]] || return 1
+  user_exists "${user}" || return 1
+  home="$(get_user_home "${user}")"
+  [[ -n "${home}" && -f "${home}/.ssh/authorized_keys" ]] || return 1
+  printf '%s\n' "${home}/.ssh/authorized_keys"
+}
+
+planned_key_material_available() {
+  [[ -n "${PASTED_PUBLIC_KEY}" ]] && return 0
+  [[ "${COPY_ROOT_KEYS}" == "yes" && -f /root/.ssh/authorized_keys ]] && return 0
+
+  if [[ "${COPY_SUDO_USER_KEYS}" == "yes" ]]; then
+    sudo_user_keys_path >/dev/null 2>&1 && return 0
   fi
+
+  [[ -n "${ADMIN_USER}" ]] && user_has_authorized_keys "${ADMIN_USER}" && return 0
+  return 1
 }
 
-save_last_ports() {
-  mkdir -p "$STATE_DIR"
-  cat > "$STATE_FILE" <<EOF
-SSH_PORT=${SSH_PORT}
-PANEL_PORT=${PANEL_PORT}
-INBOUND_PORT=${INBOUND_PORT}
-EOF
-  chmod 600 "$STATE_FILE"
-}
-
-# ---------- interactive setup ----------
 interactive_setup() {
-  CURRENT_STEP="Interactive setup (ports)"
-  step "SETUP / НАСТРОЙКА"
+  local default_ssh="22"
+  local default_admin="deploy"
+  local sudo_keys=""
+  local network_default="yes"
+  local ip_forward_default="yes"
 
-  load_last_ports
-
-  if [[ -n "${SSH_PORT:-}" || -n "${PANEL_PORT:-}" || -n "${INBOUND_PORT:-}" ]]; then
-    warn "🇷🇺 Порты из прошлого запуска:"
-    warn "🇷🇺 SSH: ${SSH_PORT:-нет} | Panel: ${PANEL_PORT:-нет} | Inbound: ${INBOUND_PORT:-нет}"
-    warn "🇬🇧 Ports from previous run:"
-    warn "🇬🇧 SSH: ${SSH_PORT:-none} | Panel: ${PANEL_PORT:-none} | Inbound: ${INBOUND_PORT:-none}"
-    tui_msg "Previous selection" \
-      "🇷🇺 Прошлый запуск:\nSSH: ${SSH_PORT:-нет}\nPanel: ${PANEL_PORT:-нет}\nInbound: ${INBOUND_PORT:-нет}\n\n🇬🇧 Previous run:\nSSH: ${SSH_PORT:-none}\nPanel: ${PANEL_PORT:-none}\nInbound: ${INBOUND_PORT:-none}"
-  fi
-
-  local ssh_default="${SSH_PORT_DEFAULT}"
-  [[ -n "${SSH_PORT:-}" ]] && ssh_default="${SSH_PORT}"
-
-  tui_info "Setup" "🇷🇺 Выбери порты, которые будут ОТКРЫТЫ в UFW.\n🇬🇧 Choose ports to be ALLOWED in UFW."
-
-  # SSH port: if it's already in use by another TCP listener, choosing it will likely fail
-  # (sshd won't be able to bind). Catch this early to avoid frustrating mid-script failures.
-    while true; do
-      SSH_PORT="$(ask_port_loop "SSH Port" "SSH port / Порт SSH (1-65535):" "$ssh_default")"
-      if [[ "$SSH_PORT" == "22" ]]; then
-        break
-      fi
-      if tcp_port_is_listening "$SSH_PORT"; then
-        local listeners
-        listeners="$(get_tcp_listeners_for_port "$SSH_PORT" | head -n 6)"
-
-        # SSH re-run: sshd already listening — OK
-        if port_tcp_listener_is_sshd "$SSH_PORT"; then
-          tui_msg "SSH Port" \
-            "🇷🇺 Порт ${SSH_PORT} уже используется SSH (sshd).\nЭто нормально при повторном запуске.\n\nПродолжаем с этим портом.\n\n🇬🇧 Port ${SSH_PORT} is already used by SSH (sshd).\nThis is normal on re-runs.\n\nContinuing with this port."
-        SSH_PORT_REUSED="yes"
-          break
-        fi
-
-        if tui_yesno "SSH Port in use" \
-          "Port ${SSH_PORT} is already LISTENing.\n\n🇷🇺 Порт занят другим процессом. Рекомендуется выбрать другой.\n🇬🇧 Port is used by another process. Recommended to choose a different one.\n\nDetected:\n${listeners}\n\nChoose a different SSH port? / Выбрать другой SSH-порт?"; then
-          continue
-        else
-          die "Aborted by user due to busy SSH port ${SSH_PORT}."
-        fi
-      fi
-      break
-    done
-
-  if [[ "$SSH_PORT" != "22" && "${SSH_PORT_REUSED:-no}" != "yes" ]]; then
-    warn "🇷🇺 Ты выбрал SSH порт ${SSH_PORT}. Порт 22 будет закрыт firewall'ом после включения UFW."
-    warn "🇷🇺 Не закрывай текущую SSH-сессию и проверь вход по новому порту в отдельном окне."
-    warn "🇬🇧 You selected SSH port ${SSH_PORT}. Port 22 will be blocked by firewall once UFW is enabled."
-    warn "🇬🇧 Keep your current SSH session open and test login on the new port in a separate window."
-    if [[ "${SSH_PORT_REUSED:-no}" != "yes" ]]; then
-    tui_msg "SSH Warning" \
-      "🇷🇺 SSH порт: ${SSH_PORT}\nНе закрывай текущую сессию.\nПроверь вход по новому порту в отдельном окне.\n\n🇬🇧 SSH port: ${SSH_PORT}\nKeep current session open.\nTest login on new port in a separate window."
-    fi
-  fi
-
-  local panel_default="${PANEL_PORT_DEFAULT}"
-  [[ -n "${PANEL_PORT:-}" ]] && panel_default="${PANEL_PORT}"
-
-  local inbound_default="${INBOUND_PORT_DEFAULT}"
-  [[ -n "${INBOUND_PORT:-}" ]] && inbound_default="${INBOUND_PORT}"
-
-  if tui_yesno "Panel Port" "Open panel port? / Открыть порт панели?"; then
-    PANEL_PORT="$(ask_unique_port_loop "Panel Port" "Panel port / Порт панели (1-65535):" "$panel_default" "$SSH_PORT")"
-
-    # Panel port may legitimately already be listening (e.g., existing admin UI).
-    # This is NOT an error: the firewall rule will be added later.
-    if [[ -n "$PANEL_PORT" ]] && tcp_port_is_listening "$PANEL_PORT"; then
-      local listeners
-      listeners="$(get_tcp_listeners_for_port "$PANEL_PORT" | head -n 6)"
-      tui_msg "Panel Port" "Note: port ${PANEL_PORT} is already listening (TCP). This is OK if intentional; UFW will allow it later.\n\nDetected:\n${listeners}"
-    fi
+  step "Configuration / Настройка"
+  load_state
+  if [[ -f "${STATE_FILE}" ]]; then
+    PREV_SSH_PORT="${SSH_PORT}"
   else
-    PANEL_PORT=""
+    PREV_SSH_PORT=""
   fi
 
-  if tui_yesno "Inbound Port" "Open inbound port? / Открыть inbound порт?"; then
-    INBOUND_PORT="$(ask_unique_port_loop "Inbound Port" "Inbound port / Inbound порт (1-65535):" "$inbound_default" "$SSH_PORT" "$PANEL_PORT")"
+  SSH_PORT="$(state_set_if_present "${SSH_PORT}" "${default_ssh}")"
+  ADMIN_USER="$(state_set_if_present "${ADMIN_USER}" "${default_admin}")"
+  ENABLE_NETWORK_TUNING="$(state_set_if_present "${ENABLE_NETWORK_TUNING}" "${network_default}")"
+  ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
+  PRIMARY_IP="$(guess_primary_ip || true)"
 
-    # Same logic: inbound port might already be listening (e.g., existing service).
-    # That's fine — we'll add firewall rules later.
-    if [[ -n "$INBOUND_PORT" ]] && tcp_port_is_listening "$INBOUND_PORT"; then
-      local listeners
-      listeners="$(get_tcp_listeners_for_port "$INBOUND_PORT" | head -n 6)"
-      tui_msg "Inbound Port" "Note: port ${INBOUND_PORT} is already listening (TCP). This is OK if intentional; UFW will allow it later.\n\nDetected:\n${listeners}"
-    fi
-  else
-    INBOUND_PORT=""
+  if [[ -f "${STATE_FILE}" ]]; then
+    say "Previous run / Предыдущий запуск:"
+    say "  SSH port / SSH-порт: ${SSH_PORT}"
+    say "  TCP ports / TCP-порты: $(csv_or_none "${ALLOW_TCP_PORTS}")"
+    say "  UDP ports / UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
+    say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
+    say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
+    say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
+    say_blank
   fi
 
-  if [[ "$SSH_PORT" != "22" ]]; then
-    if tui_yesno "SSH test checkpoint" \
-      "Enable an extra safety checkpoint to test SSH on the NEW port AFTER SSH is reconfigured, but BEFORE enabling UFW?\n\n✅ Later in this run the script will STOP and ask you to open a second session and test:\n  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>\n\n🇷🇺 Включить дополнительный контрольный чекпоинт для проверки SSH на НОВОМ порту ПОСЛЕ применения настроек SSH, но ДО включения UFW?\n\n✅ Позже в этом запуске скрипт ОСТАНОВИТСЯ и попросит открыть вторую сессию и проверить:\n  ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>\n\nDefault: Yes"; then
-      ENABLE_TEST_PAUSE="yes"
+  SSH_PORT="$(prompt_ssh_port "${SSH_PORT}")"
+  ALLOW_TCP_PORTS="$(prompt_port_specs "Extra TCP ports / Доп. TCP-порты (comma-separated, blank = none)" "${ALLOW_TCP_PORTS}")"
+  ALLOW_UDP_PORTS="$(prompt_port_specs "Extra UDP ports / Доп. UDP-порты (comma-separated, blank = none)" "${ALLOW_UDP_PORTS}")"
+
+  if prompt_yesno "Prepare a dedicated admin user? / Подготовить отдельного admin-пользователя?" "yes"; then
+    ADMIN_USER="$(prompt_username "Admin username / Имя admin-пользователя" "${ADMIN_USER}")"
+
+    if [[ -f /root/.ssh/authorized_keys ]] && [[ "${ADMIN_USER}" != "root" ]]; then
+      prompt_yesno "Copy keys from /root to ${ADMIN_USER}? / Скопировать ключи из /root в ${ADMIN_USER}?" "yes" && COPY_ROOT_KEYS="yes" || COPY_ROOT_KEYS="no"
     else
-      ENABLE_TEST_PAUSE="no"
+      COPY_ROOT_KEYS="no"
+    fi
+
+    if sudo_keys="$(sudo_user_keys_path 2>/dev/null || true)"; then
+      if [[ -n "${sudo_keys}" && "${SUDO_USER:-}" != "${ADMIN_USER}" ]]; then
+        prompt_yesno "Copy keys from ${SUDO_USER} to ${ADMIN_USER}? / Скопировать ключи пользователя ${SUDO_USER} в ${ADMIN_USER}?" "yes" && COPY_SUDO_USER_KEYS="yes" || COPY_SUDO_USER_KEYS="no"
+      fi
+    else
+      COPY_SUDO_USER_KEYS="no"
+    fi
+
+    show_public_key_help
+
+    PASTED_PUBLIC_KEY="$(prompt_public_key "Paste an extra SSH public key for ${ADMIN_USER} (single line; blank = skip) / Вставь доп. SSH public key для ${ADMIN_USER}")"
+
+    if planned_key_material_available; then
+      prompt_yesno "Disable root login and password auth after a successful test? / Отключить root login и password auth после проверки?" "yes" && STRICT_SSH_HARDENING="yes" || STRICT_SSH_HARDENING="no"
+    else
+      STRICT_SSH_HARDENING="no"
+      warn_user "No key material found for ${ADMIN_USER}; strict SSH lock-down will be skipped. / Для ${ADMIN_USER} не найден ключ, строгий SSH hardening будет пропущен."
     fi
   else
-    ENABLE_TEST_PAUSE="no"
+    ADMIN_USER=""
+    COPY_ROOT_KEYS="no"
+    COPY_SUDO_USER_KEYS="no"
+    PASTED_PUBLIC_KEY=""
+    STRICT_SSH_HARDENING="no"
   fi
 
-  save_last_ports
-}
-
-confirm_or_exit() {
-  CURRENT_STEP="Confirmation"
-  step "SUMMARY / СВОДКА"
-
-  local panel_txt="${PANEL_PORT:-not opened}"
-  local inbound_txt="${INBOUND_PORT:-not opened (TCP + UDP)}"
-  log "SSH port:     ${SSH_PORT}"
-  log "Panel port:   ${panel_txt}"
-  log "Inbound port: ${inbound_txt}"
-
-  echo
-  echo "------------------------------------------------------------"
-  warn "🇷🇺 КОНТРОЛЬНАЯ ТОЧКА: дальше будут применены изменения."
-  warn "🇬🇧 CHECKPOINT: changes will be applied next."
-  echo "------------------------------------------------------------"
-  echo
-
-  local msg
-  msg="$(printf '%b' \
-"🇷🇺 Выбранные порты:
-SSH: ${SSH_PORT}
-Panel: ${panel_txt}
-Inbound: ${inbound_txt}
-
-\
-🇷🇺 Важно: скрипт НЕ управляет SSH ключами и НЕ отключает root/password.
-
-\
-🇬🇧 Selected ports:
-SSH: ${SSH_PORT}
-Panel: ${panel_txt}
-Inbound: ${inbound_txt}
-
-\
-🇬🇧 Note: script does NOT manage SSH keys and does NOT disable root/password.
-")"
-
-  if ! tui_yesno "Confirm" "${msg}
-Proceed / Продолжить?"; then
-    die "Aborted by user."
+  show_network_tuning_help
+  if prompt_yesno "Apply network tuning baseline? / Применить сетевой профиль?" "${ENABLE_NETWORK_TUNING}"; then
+    ENABLE_NETWORK_TUNING="yes"
+    if prompt_yesno "Enable IPv4 forwarding for proxy/tunnel workloads? / Включить IPv4 forwarding для proxy/tunnel?" "${ENABLE_IP_FORWARD}"; then
+      ENABLE_IP_FORWARD="yes"
+    else
+      ENABLE_IP_FORWARD="no"
+    fi
+  else
+    ENABLE_NETWORK_TUNING="no"
+    ENABLE_IP_FORWARD="no"
   fi
+
+  save_state
 }
 
-# ---------- steps ----------
+confirm_configuration() {
+  step "Review / Проверка плана"
+  say "Planned changes / Что будет применено:"
+  say "  SSH port / SSH-порт: ${SSH_PORT}"
+  say "  Extra TCP ports / Доп. TCP-порты: $(csv_or_none "${ALLOW_TCP_PORTS}")"
+  say "  Extra UDP ports / Доп. UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
+
+  if [[ -n "${ADMIN_USER}" ]]; then
+    say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
+    say "  Passwordless sudo / Sudo без пароля: yes / да"
+    say "  Disable root/password login after check / Отключить root/password после проверки: $(bool_or_no "${STRICT_SSH_HARDENING}")"
+  else
+    say "  Admin user / Admin-пользователь: none / нет"
+  fi
+
+  say "  UFW / Firewall: keep existing rules + refresh managed rules"
+  say "  Fail2Ban: stronger SSH defaults / более жёсткий SSH baseline"
+  say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
+  if [[ "${ENABLE_NETWORK_TUNING}" == "yes" ]]; then
+    say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
+    say "  What it adds / Что добавляет: BBR, fq, bigger buffers, backlog, keepalive, fastopen"
+  fi
+
+  prompt_yesno "Continue? / Продолжить?" "no" || die "Aborted by user. / Остановлено пользователем."
+}
+
 apt_update_and_upgrade() {
-  CURRENT_STEP="System update (apt)"
-  step "1/4 SYSTEM UPDATE / ОБНОВЛЕНИЕ СИСТЕМЫ"
-  gauge_update 10 "Updating system packages (apt)..."
-
-  warn "🇷🇺 Выполняю безопасное обновление пакетов."
-  warn "🇬🇧 Running safe package upgrade."
+  step "System update / Обновление системы"
+  log "Running apt update and upgrade."
 
   apt-get update -y
-
   DEBIAN_FRONTEND=noninteractive \
-  apt-get upgrade -y \
-    -o Dpkg::Options::="--force-confdef" \
-    -o Dpkg::Options::="--force-confold"
+    apt-get upgrade -y \
+      -o Dpkg::Options::="--force-confdef" \
+      -o Dpkg::Options::="--force-confold"
 }
 
 apt_install() {
-  CURRENT_STEP="Install packages"
-  step "2/4 PACKAGES / ПАКЕТЫ"
-  gauge_update 35 "Installing base packages (ufw, fail2ban, tools, whiptail)..."
-
-  warn "🇷🇺 Ставлю базовые утилиты (git, jq, unzip, htop, nano)."
-  warn "🇬🇧 Installing helpful tools (git, jq, unzip, htop, nano)."
+  step "Base packages / Установка пакетов"
+  log "Installing required packages."
 
   apt-get install -y \
-    ufw fail2ban \
+    openssh-server sudo ufw fail2ban \
     ca-certificates curl gnupg lsb-release \
-    git jq unzip htop nano \
-    whiptail
+    git jq unzip htop nano iproute2
 }
 
-# ---------- ssh configuration ----------
-set_sshd_kv() {
-  local key="$1"
-  local value="$2"
-  local file="/etc/ssh/sshd_config"
+ensure_admin_user() {
+  local home=""
+  local sudoers_file=""
 
-  if grep -qiE "^\s*#?\s*${key}\s+" "$file"; then
-    sed -i -E "s|^\s*#?\s*${key}\s+.*|${key} ${value}|I" "$file"
+  [[ -n "${ADMIN_USER}" ]] || return 0
+
+  step "Admin user / Подготовка пользователя"
+
+  if user_exists "${ADMIN_USER}"; then
+    log "User ${ADMIN_USER} already exists."
+    usermod -s /bin/bash "${ADMIN_USER}"
   else
-    echo "${key} ${value}" >>"$file"
+    log "Creating user ${ADMIN_USER}."
+    adduser --disabled-password --gecos "" "${ADMIN_USER}"
+  fi
+
+  groupadd -f sudo
+  usermod -aG sudo "${ADMIN_USER}"
+
+  sudoers_file="/etc/sudoers.d/90-vps-hardening-${ADMIN_USER}"
+  cat > "${sudoers_file}" <<EOF
+${ADMIN_USER} ALL=(ALL:ALL) NOPASSWD:ALL
+EOF
+  chmod 440 "${sudoers_file}"
+  visudo -cf "${sudoers_file}" >/dev/null
+
+  home="$(get_user_home "${ADMIN_USER}")"
+  install -d -m 700 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${home}/.ssh"
+}
+
+install_admin_keys() {
+  local home=""
+  local target=""
+  local tmp=""
+  local sudo_keys=""
+
+  [[ -n "${ADMIN_USER}" ]] || return 0
+
+  step "SSH keys / Подготовка ключей"
+
+  home="$(get_user_home "${ADMIN_USER}")"
+  target="${home}/.ssh/authorized_keys"
+  tmp="$(mktemp)"
+
+  if [[ -f "${target}" ]]; then
+    cat "${target}" >> "${tmp}"
+  fi
+
+  if [[ "${COPY_ROOT_KEYS}" == "yes" && -f /root/.ssh/authorized_keys ]]; then
+    cat /root/.ssh/authorized_keys >> "${tmp}"
+  fi
+
+  if [[ "${COPY_SUDO_USER_KEYS}" == "yes" ]]; then
+    sudo_keys="$(sudo_user_keys_path 2>/dev/null || true)"
+    if [[ -n "${sudo_keys}" ]]; then
+      cat "${sudo_keys}" >> "${tmp}"
+    fi
+  fi
+
+  if [[ -n "${PASTED_PUBLIC_KEY}" ]]; then
+    printf '%s\n' "${PASTED_PUBLIC_KEY}" >> "${tmp}"
+  fi
+
+  if [[ -s "${tmp}" ]]; then
+    awk 'NF && !seen[$0]++' "${tmp}" > "${tmp}.uniq"
+    install -m 600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${tmp}.uniq" "${target}"
+    ADMIN_KEYS_READY="yes"
+    log "Authorized keys installed for ${ADMIN_USER}."
+  else
+    ADMIN_KEYS_READY="no"
+    warn_user "No SSH keys found for ${ADMIN_USER}. / Для ${ADMIN_USER} не найдено ни одного SSH-ключа."
+  fi
+
+  rm -f "${tmp}" "${tmp}.uniq"
+
+  if [[ "${STRICT_SSH_HARDENING}" == "yes" && "${ADMIN_KEYS_READY}" != "yes" ]]; then
+    STRICT_SSH_HARDENING="no"
+    warn_user "Strict SSH lock-down was cancelled because keys are not ready. / Строгий SSH hardening отменён: ключи не подготовлены."
   fi
 }
 
 ensure_run_sshd_dir() {
   if [[ -e /run/sshd && ! -d /run/sshd ]]; then
-    die "/run/sshd exists but is not a directory"
+    die "/run/sshd exists but is not a directory. / /run/sshd существует, но это не каталог."
   fi
-  if [[ ! -d /run/sshd ]]; then
-    mkdir -p /run/sshd
-    chmod 755 /run/sshd
+  mkdir -p /run/sshd
+  chmod 755 /run/sshd
+}
+
+ensure_sshd_include() {
+  if ! grep -Eq '^[[:space:]]*Include[[:space:]]+/etc/ssh/sshd_config\.d/\*\.conf' /etc/ssh/sshd_config; then
+    printf '\nInclude /etc/ssh/sshd_config.d/*.conf\n' >> /etc/ssh/sshd_config
   fi
 }
 
-# ssh.socket can be used on Ubuntu 24+. If the unit exists, the listening port is controlled by the socket.
-# IMPORTANT: do not rely on is-enabled/is-active here; just check that the unit exists.
-ssh_socket_enabled_or_active() {
-  systemctl cat ssh.socket >/dev/null 2>&1
+ssh_socket_managed() {
+  systemctl is-active --quiet ssh.socket || systemctl is-enabled ssh.socket >/dev/null 2>&1
 }
 
-apply_ssh_socket_port_override() {
-  local port="$1"
+write_ssh_socket_override() {
+  local ports=("$@")
+  local port=""
 
   mkdir -p /etc/systemd/system/ssh.socket.d
 
-  # IMPORTANT:
-  # Some systems may end up with IPv6-only listener ([::]:port), which breaks IPv4 access.
-  # Bind explicitly on both IPv4 and IPv6 to avoid lockouts.
-  cat >/etc/systemd/system/ssh.socket.d/override.conf <<EOF
-[Socket]
-ListenStream=
-ListenStream=0.0.0.0:${port}
-ListenStream=[::]:${port}
-EOF
-
-  systemctl daemon-reload
-  systemctl restart ssh.socket
+  {
+    echo "[Socket]"
+    echo "ListenStream="
+    for port in "${ports[@]}"; do
+      echo "ListenStream=0.0.0.0:${port}"
+      echo "ListenStream=[::]:${port}"
+    done
+  } > "${SSH_SOCKET_DROPIN}"
 }
 
-rollback_ssh_socket_override_to_22() {
-  mkdir -p /etc/systemd/system/ssh.socket.d
-  cat >/etc/systemd/system/ssh.socket.d/override.conf <<EOF
-[Socket]
-ListenStream=
-ListenStream=0.0.0.0:22
-ListenStream=[::]:22
-EOF
-  systemctl daemon-reload
-  systemctl restart ssh.socket || true
-}
+write_sshd_config() {
+  local mode="$1"
+  local ports=("${@:2}")
+  local port=""
 
-assert_ssh_service_active() {
-  systemctl is-active --quiet ssh
-}
+  ensure_sshd_include
 
-assert_listening_port() {
-  local port="$1"
-  ss -lnt 2>/dev/null | grep -qE "LISTEN.+:${port}\b"
+  {
+    echo "# Managed by vps-hardening"
+    for port in "${ports[@]}"; do
+      echo "Port ${port}"
+    done
+    echo "PubkeyAuthentication yes"
+    echo "PermitEmptyPasswords no"
+    echo "UsePAM yes"
+
+    if [[ "${mode}" == "final" && "${STRICT_SSH_HARDENING}" == "yes" ]]; then
+      echo "PermitRootLogin no"
+      echo "PasswordAuthentication no"
+      echo "KbdInteractiveAuthentication no"
+      echo "ChallengeResponseAuthentication no"
+    fi
+  } > "${SSHD_DROPIN}"
 }
 
 assert_listening_port_ipv4() {
   local port="$1"
-  # Expect an IPv4 listener like 0.0.0.0:port or A.B.C.D:port (ss prints IPv6 as [::]:port).
-  ss -lnt 2>/dev/null | awk -v p=":"port '
+
+  ss -lnt 2>/dev/null | awk -v p=":${port}" '
     $1=="LISTEN" && $4 ~ (p"$") && $4 !~ /^\[::\]/ { ok=1 }
-    END { exit(ok?0:1) }
+    END { exit(ok ? 0 : 1) }
   '
 }
 
-configure_sshd() {
-  CURRENT_STEP="Configure SSH (sshd)"
-  step "3/4 SSH / НАСТРОЙКА SSH"
-  gauge_update 55 "Configuring SSH..."
+reload_ssh_stack() {
+  systemctl daemon-reload
 
-  warn "🇷🇺 Сейчас будет изменена конфигурация SSH."
-  warn "🇷🇺 Не закрывай текущую SSH-сессию; проверь вход по новому порту в отдельном окне."
-  warn "🇬🇧 SSH config will be updated."
-  warn "🇬🇧 Keep current SSH session; test login on new port in a separate window."
-
-  log "Setting SSH Port = ${SSH_PORT}"
-  # Temporary dual-port mode for safety
-  if [[ "$SSH_PORT" != "22" ]]; then
-    set_sshd_kv "Port" "22"
-    echo "Port ${SSH_PORT}" >> /etc/ssh/sshd_config
+  if ssh_socket_managed; then
+    systemctl restart ssh.socket
+    systemctl restart ssh || true
   else
-    set_sshd_kv "Port" "22"
+    systemctl restart ssh
+  fi
+}
+
+configure_ssh_bootstrap() {
+  local ports=("bootstrap" "22")
+
+  step "SSH bootstrap / Подготовка SSH"
+
+  if [[ "${SSH_PORT}" != "22" ]]; then
+    ports+=("${SSH_PORT}")
   fi
 
-  # Bootstrap-friendly (do not disable root/password auth)
-  set_sshd_kv "PermitEmptyPasswords" "no"
-  set_sshd_kv "ChallengeResponseAuthentication" "no"
-  set_sshd_kv "UsePAM" "yes"
+  write_sshd_config "${ports[@]}"
+
+  if ssh_socket_managed; then
+    write_ssh_socket_override "${ports[@]:1}"
+  fi
 
   ensure_run_sshd_dir
-
-  log "Validating sshd_config (sshd -t)..."
   sshd -t
+  reload_ssh_stack
 
-  if ssh_socket_enabled_or_active; then
-    warn "🇷🇺 Обнаружен ssh.socket (socket activation). Применяю override на порт ${SSH_PORT}."
-    warn "🇬🇧 Detected ssh.socket (socket activation). Applying override for port ${SSH_PORT}."
-    apply_ssh_socket_port_override "${SSH_PORT}"
-
-    # Safety: ensure IPv4 is actually listening (avoid IPv6-only lockouts)
-    if ! assert_listening_port_ipv4 "${SSH_PORT}"; then
-      warn "🇷🇺 ВНИМАНИЕ: SSH слушает порт ${SSH_PORT} только по IPv6. Исправляю на IPv4+IPv6 (0.0.0.0 + [::])."
-      warn "🇬🇧 WARNING: SSH appears IPv6-only on port ${SSH_PORT}. Fixing to bind IPv4+IPv6 (0.0.0.0 + [::])."
-      apply_ssh_socket_port_override "${SSH_PORT}"
-    fi
-  fi
-
-  log "Restarting SSH service..."
-  systemctl restart ssh
-
-  if ! assert_ssh_service_active; then
-    die "SSH service is NOT active after restart. Do NOT close your current session."
-  fi
-
-  if ! assert_listening_port "${SSH_PORT}"; then
-    warn "SSH does NOT appear to be listening on port ${SSH_PORT}."
-    warn "Debug hint: ss -lntp | grep -E ':(22|${SSH_PORT})\\b'"
-    warn "Debug hint: systemctl status ssh.socket (if enabled)"
-    if ssh_socket_enabled_or_active; then
-      # If socket activation is used, require IPv4 listener too (most users connect over IPv4).
-      if ! assert_listening_port_ipv4 "${SSH_PORT}"; then
-        warn "SSH is NOT listening on IPv4 for port ${SSH_PORT} (IPv6-only). This can lock you out."
-        warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
-        rollback_ssh_socket_override_to_22
-        die "Do NOT close your current session. Fix IPv4 SSH listening before continuing."
-      fi
-
-      warn "Attempting safe rollback of ssh.socket override to port 22 to preserve access..."
-      rollback_ssh_socket_override_to_22
-    fi
-    die "Do NOT close your current session. Fix SSH port before continuing."
-  fi
-
-  log "SSH is active and listening on port ${SSH_PORT}."
-}
-
-checkpoint_optional_pause() {
-  CURRENT_STEP="Checkpoint (optional SSH test pause)"
-  [[ "$ENABLE_TEST_PAUSE" == "yes" && "$SSH_PORT" != "22" ]] || return 0
-
-
-  # If UFW is already active (e.g., firewall enabled before this script),
-  # temporarily allow the NEW SSH port so the checkpoint test is meaningful.
-  if ufw_is_active; then
-    warn "UFW is already active. Temporarily allowing SSH port ${SSH_PORT}/tcp for checkpoint test..."
-    ufw_temp_allow_port "${SSH_PORT}"
-  fi
-  # SSH test checkpoint: confirm that you can log in on the NEW port before enabling UFW.
-  if ! tui_yesno "SSH test result / Результат проверки" \
-    "🇷🇺 СЕЙЧАС проверь вход по SSH на новом порту ${SSH_PORT}.
-
-1) НЕ закрывай эту сессию.
-2) Открой ВТОРОЕ окно/терминал и выполни:
-   ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
-3) Если вход НЕ работает — нажми Cancel и НЕ продолжай.
-
-🇬🇧 NOW test SSH login on the new port ${SSH_PORT}.
-
-1) Do NOT close this session.
-2) Open a SECOND terminal and run:
-   ssh -p ${SSH_PORT} root@<YOUR_SERVER_IP>
-3) If login does NOT work — press Cancel and do NOT continue.
-
-🇷🇺 Если вход НЕ работает — выбери No (Cancel) и НЕ продолжай.
-🇬🇧 If login does NOT work — choose No (Cancel) and do NOT continue.
-
-✅ Did login on port ${SSH_PORT} work? / ✅ Вход по порту ${SSH_PORT} работает?" ; then
-    die "Aborted by user (SSH test checkpoint)."
-  fi
-
-  SSH_TEST_CONFIRMED="yes"
-  gauge_resume_after_dialog || true
-}
-
-finalize_legacy_ssh_port_22_if_confirmed() {
-  local cfg="/etc/ssh/sshd_config"
-  local backup=""
-
-  [[ "${SSH_TEST_CONFIRMED:-no}" == "yes" ]] || return 0
-  [[ "${SSH_PORT}" != "22" ]] || return 0
-
-  grep -qE '^\s*Port\s+22\s*$' "$cfg" 2>/dev/null || return 0
-
-  warn "🇷🇺 Вход по новому SSH порту ${SSH_PORT} подтверждён. Удаляю Port 22 из sshd_config."
-  warn "🇬🇧 New SSH port ${SSH_PORT} confirmed. Removing Port 22 from sshd_config."
-
-  backup="${cfg}.bak.$(date +%Y%m%d_%H%M%S)"
-  cp -a "$cfg" "$backup"
-
-  sed -i -E '/^\s*Port\s+22\s*$/d' "$cfg"
-
-  if sshd -t; then
-    systemctl reload ssh 2>/dev/null || systemctl restart ssh
-    log "Legacy Port 22 removed from sshd_config."
-  else
-    warn "sshd -t failed after removing Port 22. Restoring backup: $backup"
-    cp -a "$backup" "$cfg"
-    systemctl reload ssh 2>/dev/null || systemctl restart ssh
-    return 1
+  assert_listening_port_ipv4 "22" || die "SSH is not listening on IPv4 port 22. / SSH не слушает IPv4 на порту 22."
+  if [[ "${SSH_PORT}" != "22" ]]; then
+    assert_listening_port_ipv4 "${SSH_PORT}" || die "SSH is not listening on IPv4 port ${SSH_PORT}. / SSH не слушает IPv4 на порту ${SSH_PORT}."
   fi
 }
 
-
-# ---------- firewall ----------
-
-# ---------- firewall helpers ----------
 ufw_is_active() {
   command -v ufw >/dev/null 2>&1 || return 1
-  ufw status 2>/dev/null | head -n 1 | grep -qi '^Status:\s*active'
+  ufw status 2>/dev/null | head -n 1 | grep -qi '^Status:[[:space:]]*active'
 }
 
 ufw_temp_allow_port() {
   local port="$1"
-  # Best-effort: allow the new SSH port for checkpoint testing IF UFW is already active.
-  # This is temporary: configure_ufw() will reset rules anyway.
-  ufw allow "${port}/tcp" comment "SSH (temp for checkpoint)" >/dev/null 2>&1 || true
+  ufw allow "${port}/tcp" comment "SSH temp checkpoint" >/dev/null 2>&1 || true
   ufw reload >/dev/null 2>&1 || true
 }
 
-configure_ufw() {
-  CURRENT_STEP="Configure firewall (UFW)"
-  step "4/4 FIREWALL (UFW) / ФАЕРВОЛ"
-  gauge_update 75 "Configuring firewall (UFW)..."
+checkpoint_ssh_access() {
+  local test_user="root"
 
-  if [[ "$ENABLE_UFW" != "yes" ]]; then
-    warn "🇷🇺 Firewall пропущен."
-    warn "🇬🇧 Firewall skipped."
-    return
+  if [[ "${ADMIN_KEYS_READY}" == "yes" ]]; then
+    test_user="${ADMIN_USER}"
   fi
 
-  warn "🇷🇺 ВАЖНО: Включение UFW НЕ учитывает особенности провайдера и СБРОСИТ существующие правила."
-  warn "🇬🇧 IMPORTANT: Enabling UFW may reset existing rules and does not account for provider specifics."
+  if [[ "${SSH_PORT}" == "22" && "${STRICT_SSH_HARDENING}" != "yes" ]]; then
+    return 0
+  fi
 
-  ufw --force reset
+  step "SSH checkpoint / Проверка входа"
+
+  if ufw_is_active; then
+    ufw_temp_allow_port "${SSH_PORT}"
+  fi
+
+  say "Open a second SSH session and keep this one open. / Открой вторую SSH-сессию и не закрывай текущую."
+  if [[ -n "${PRIMARY_IP}" ]]; then
+    say "Command / Команда:"
+    say "  ssh -p ${SSH_PORT} ${test_user}@${PRIMARY_IP}"
+  else
+    say "Command / Команда:"
+    say "  ssh -p ${SSH_PORT} ${test_user}@<server-ip>"
+  fi
+
+  if [[ "${STRICT_SSH_HARDENING}" == "yes" ]]; then
+    say "Test the new admin user with a key. / Проверь вход новым пользователем по ключу."
+  fi
+
+  prompt_yesno "Confirm that the login worked? / Подтверждаешь, что вход сработал?" "no" || die "SSH checkpoint failed or was not confirmed. / Проверка SSH не подтверждена."
+  SSH_TEST_CONFIRMED="yes"
+}
+
+configure_ssh_final() {
+  local ports=("final" "${SSH_PORT}")
+
+  step "SSH finalization / Финальная настройка SSH"
+
+  [[ "${SSH_TEST_CONFIRMED}" == "yes" || "${SSH_PORT}" == "22" ]] || die "SSH finalization requires a confirmed SSH test. / Для финального SSH нужен подтверждённый тест входа."
+
+  write_sshd_config "${ports[@]}"
+
+  if ssh_socket_managed; then
+    write_ssh_socket_override "${SSH_PORT}"
+  fi
+
+  ensure_run_sshd_dir
+  sshd -t
+  reload_ssh_stack
+
+  assert_listening_port_ipv4 "${SSH_PORT}" || die "SSH is not listening on IPv4 port ${SSH_PORT} after finalization. / После финализации SSH не слушает IPv4 на порту ${SSH_PORT}."
+}
+
+rewrite_ufw_icmp_block() {
+  local file="$1"
+  local tmp=""
+
+  [[ -f "${file}" ]] || die "Missing ${file}. / Не найден файл ${file}."
+  tmp="$(mktemp)"
+
+  awk '
+    BEGIN {
+      replaced = 0
+      skip = 0
+    }
+
+    /^# ok icmp codes for INPUT$/ && !replaced {
+      print "# ok icmp codes for INPUT"
+      print "-A ufw-before-input -p icmp --icmp-type destination-unreachable -j DROP"
+      print "-A ufw-before-input -p icmp --icmp-type time-exceeded -j DROP"
+      print "-A ufw-before-input -p icmp --icmp-type parameter-problem -j DROP"
+      print "-A ufw-before-input -p icmp --icmp-type echo-request -j DROP"
+      print "-A ufw-before-input -p icmp --icmp-type source-quench -j DROP"
+      print ""
+      print "# ok icmp code for FORWARD"
+      print "-A ufw-before-forward -p icmp --icmp-type destination-unreachable -j DROP"
+      print "-A ufw-before-forward -p icmp --icmp-type time-exceeded -j DROP"
+      print "-A ufw-before-forward -p icmp --icmp-type parameter-problem -j DROP"
+      print "-A ufw-before-forward -p icmp --icmp-type echo-request -j DROP"
+      print ""
+      print "# allow dhcp client to work"
+      replaced = 1
+      skip = 1
+      next
+    }
+
+    skip && /^# allow dhcp client to work$/ {
+      skip = 0
+      next
+    }
+
+    skip {
+      next
+    }
+
+    {
+      print
+    }
+
+    END {
+      if (!replaced) {
+        exit 42
+      }
+    }
+  ' "${file}" > "${tmp}" || {
+    rm -f "${tmp}"
+    die "Failed to rewrite ICMP block in ${file}. / Не удалось переписать ICMP-блок в ${file}."
+  }
+
+  install -m 644 "${tmp}" "${file}"
+  rm -f "${tmp}"
+}
+
+apply_ufw_icmp_baseline() {
+  step "UFW baseline / ICMP-профиль"
+  rewrite_ufw_icmp_block /etc/ufw/before.rules
+}
+
+apply_ufw_ports_from_csv() {
+  local csv="$1"
+  local proto="$2"
+  local comment="$3"
+  local token=""
+  local spec=""
+  local items=()
+
+  [[ -n "${csv}" ]] || return 0
+  IFS=',' read -r -a items <<< "${csv}"
+
+  for token in "${items[@]}"; do
+    [[ -n "${token}" ]] || continue
+    spec="${token/-/:}"
+    ufw allow "${spec}/${proto}" comment "${comment}"
+  done
+}
+
+delete_managed_ufw_rules() {
+  local number=""
+
+  ufw status numbered 2>/dev/null | awk '
+    /# Managed by vps-hardening$/ || /# vps-hardening ssh$/ || /# vps-hardening tcp$/ || /# vps-hardening udp$/ {
+      if (match($0, /^\[[[:space:]]*([0-9]+)\]/, m)) {
+        print m[1]
+      }
+    }
+  ' | sort -rn | while read -r number; do
+    [[ -n "${number}" ]] || continue
+    ufw --force delete "${number}" >/dev/null 2>&1 || true
+  done
+}
+
+remove_legacy_ufw_ssh_rule() {
+  local previous_port="$1"
+  local current_port="$2"
+
+  [[ -n "${previous_port}" ]] || return 0
+  [[ "${previous_port}" != "${current_port}" ]] || return 0
+
+  ufw --force delete allow "${previous_port}/tcp" >/dev/null 2>&1 || true
+}
+
+configure_ufw() {
+  step "Firewall / Настройка UFW"
+
   ufw default deny incoming
   ufw default allow outgoing
 
-  log "Allowing SSH: ${SSH_PORT}/tcp"
-  ufw allow "${SSH_PORT}/tcp" comment "SSH"
+  apply_ufw_icmp_baseline
+  delete_managed_ufw_rules
+  remove_legacy_ufw_ssh_rule "${PREV_SSH_PORT}" "${SSH_PORT}"
 
-  if [[ -n "$PANEL_PORT" ]]; then
-    log "Allowing Panel: ${PANEL_PORT}/tcp"
-    ufw allow "${PANEL_PORT}/tcp" comment "Panel"
+  ufw allow "${SSH_PORT}/tcp" comment "vps-hardening ssh"
+  apply_ufw_ports_from_csv "${ALLOW_TCP_PORTS}" "tcp" "vps-hardening tcp"
+  apply_ufw_ports_from_csv "${ALLOW_UDP_PORTS}" "udp" "vps-hardening udp"
+
+  if ufw_is_active; then
+    ufw reload
   else
-    log "Panel port not opened."
+    ufw --force enable
   fi
-
-  if [[ -n "$INBOUND_PORT" ]]; then
-    log "Allowing Inbound: ${INBOUND_PORT}/tcp and ${INBOUND_PORT}/udp"
-    ufw allow "${INBOUND_PORT}/tcp" comment "Inbound"
-    ufw allow "${INBOUND_PORT}/udp" comment "Inbound (UDP)"
-  else
-    log "Inbound port not opened."
-  fi
-
-  ufw --force enable
-  ufw status verbose >/dev/null >/dev/null
-
-  finalize_legacy_ssh_port_22_if_confirmed
 }
 
-# ---------- fail2ban ----------
 configure_fail2ban() {
-  CURRENT_STEP="Configure Fail2Ban"
-  step "EXTRA: FAIL2BAN / ДОП: FAIL2BAN"
-  gauge_update 90 "Configuring Fail2Ban..."
-
-  warn "🇷🇺 Fail2Ban будет включён для SSH и защитит порт ${SSH_PORT}."
-  warn "🇬🇧 Fail2Ban will be enabled for SSH and protect port ${SSH_PORT}."
+  step "Fail2Ban / Настройка"
 
   mkdir -p /etc/fail2ban/jail.d
 
-  cat >/etc/fail2ban/jail.d/sshd.local <<EOF
+  cat > "${FAIL2BAN_DROPIN}" <<EOF
+[DEFAULT]
+backend = systemd
+banaction = ufw
+bantime = 12h
+findtime = 10m
+maxretry = 4
+usedns = warn
+ignoreip = 127.0.0.1/8 ::1
+
 [sshd]
 enabled = true
 port = ${SSH_PORT}
-bantime = 1h
+mode = aggressive
+maxretry = 3
 findtime = 10m
+bantime = 24h
+
+[recidive]
+enabled = true
+logpath = /var/log/fail2ban.log
+bantime = 7d
+findtime = 1d
 maxretry = 5
 EOF
 
-  log "Written: /etc/fail2ban/jail.d/sshd.local"
-
   systemctl enable --now fail2ban
   systemctl restart fail2ban
+}
 
-  log "Fail2ban status (short):"
-  systemctl --no-pager --full status fail2ban | head -n 20 || true
+sysctl_value_or_unknown() {
+  local key="$1"
+  local value=""
+
+  value="$(sysctl -n "${key}" 2>/dev/null || true)"
+  if [[ -n "${value}" ]]; then
+    printf '%s' "${value}"
+  else
+    printf 'unknown / неизвестно'
+  fi
+}
+
+backup_network_sysctl_conflicts() {
+  local backup_dir="${SYSCTL_BACKUP_ROOT}/$(date +%Y%m%d-%H%M%S)"
+  local backed="no"
+  local file=""
+  local conflict_files=(
+    "${SYSCTL_DROPIN}"
+    "/etc/sysctl.d/99-vlf-net.conf"
+    "/etc/sysctl.d/99-vlf-net-tune.conf"
+    "/etc/sysctl.d/99-tcp-tuning.conf"
+    "/etc/sysctl.d/10-bufferbloat.conf"
+    "/etc/sysctl.d/99-sysctl.conf"
+    "/etc/sysctl.conf"
+  )
+
+  SYSCTL_BACKUP_DIR=""
+
+  for file in "${conflict_files[@]}"; do
+    [[ -f "${file}" ]] || continue
+
+    if [[ "${backed}" != "yes" ]]; then
+      mkdir -p "${backup_dir}"
+      backed="yes"
+    fi
+
+    cp -a "${file}" "${backup_dir}/"
+  done
+
+  if [[ "${backed}" == "yes" ]]; then
+    SYSCTL_BACKUP_DIR="${backup_dir}"
+    log "Backed up existing sysctl files to ${SYSCTL_BACKUP_DIR}."
+  else
+    log "No known sysctl conflict files found."
+  fi
+}
+
+capture_network_sysctl_baseline() {
+  local keys=(
+    "net.ipv4.ip_forward"
+    "net.core.default_qdisc"
+    "net.ipv4.tcp_congestion_control"
+    "net.core.rmem_max"
+    "net.core.wmem_max"
+    "net.ipv4.tcp_rmem"
+    "net.ipv4.tcp_wmem"
+    "net.core.netdev_max_backlog"
+    "net.core.somaxconn"
+    "net.ipv4.tcp_max_syn_backlog"
+    "net.ipv4.tcp_mtu_probing"
+    "net.ipv4.tcp_fastopen"
+    "net.ipv4.tcp_slow_start_after_idle"
+    "net.ipv4.tcp_keepalive_time"
+    "net.ipv4.tcp_keepalive_intvl"
+    "net.ipv4.tcp_keepalive_probes"
+    "net.ipv4.tcp_retries2"
+  )
+  local key=""
+  local value=""
+
+  mkdir -p "${STATE_DIR}"
+
+  {
+    for key in "${keys[@]}"; do
+      value="$(sysctl -n "${key}" 2>/dev/null || true)"
+      [[ -n "${value}" ]] || continue
+      printf '%s=%s\n' "${key}" "${value}"
+    done
+  } > "${SYSCTL_BASELINE_FILE}"
+
+  chmod 600 "${SYSCTL_BASELINE_FILE}"
+  log "Captured baseline sysctl values in ${SYSCTL_BASELINE_FILE}."
+}
+
+restore_network_sysctl_baseline() {
+  local key=""
+  local value=""
+
+  [[ -f "${SYSCTL_BASELINE_FILE}" ]] || return 0
+
+  while IFS='=' read -r key value; do
+    [[ -n "${key}" ]] || continue
+    sysctl -w "${key}=${value}" >/dev/null
+  done < "${SYSCTL_BASELINE_FILE}"
+
+  log "Restored baseline sysctl values from ${SYSCTL_BASELINE_FILE}."
+}
+
+write_network_sysctl_profile() {
+  {
+    echo "# Managed by vps-hardening"
+    echo "# Network tuning: BBR, fq, buffers, backlog, keepalive, fastopen"
+    echo
+    echo "net.ipv4.ip_forward = $( [[ "${ENABLE_IP_FORWARD}" == "yes" ]] && echo 1 || echo 0 )"
+    echo "net.core.default_qdisc = fq"
+    echo "net.ipv4.tcp_congestion_control = bbr"
+    echo
+    echo "net.core.rmem_max = 67108864"
+    echo "net.core.wmem_max = 67108864"
+    echo "net.ipv4.tcp_rmem = 4096 87380 67108864"
+    echo "net.ipv4.tcp_wmem = 4096 65536 67108864"
+    echo
+    echo "net.core.netdev_max_backlog = 250000"
+    echo "net.core.somaxconn = 8192"
+    echo "net.ipv4.tcp_max_syn_backlog = 8192"
+    echo
+    echo "net.ipv4.tcp_mtu_probing = 1"
+    echo "net.ipv4.tcp_fastopen = 3"
+    echo "net.ipv4.tcp_slow_start_after_idle = 0"
+    echo
+    echo "net.ipv4.tcp_keepalive_time = 45"
+    echo "net.ipv4.tcp_keepalive_intvl = 10"
+    echo "net.ipv4.tcp_keepalive_probes = 6"
+    echo
+    echo "net.ipv4.tcp_retries2 = 12"
+  } > "${SYSCTL_DROPIN}"
+
+  chmod 0644 "${SYSCTL_DROPIN}"
+  log "Written network sysctl profile to ${SYSCTL_DROPIN}."
+}
+
+apply_network_sysctl_profile() {
+  log "Applying sysctl profile."
+  sysctl --system
+}
+
+log_network_tuning_status() {
+  log "Network tuning verification:"
+  sysctl \
+    net.ipv4.ip_forward \
+    net.core.default_qdisc \
+    net.ipv4.tcp_congestion_control \
+    net.core.rmem_max \
+    net.core.wmem_max \
+    net.ipv4.tcp_rmem \
+    net.ipv4.tcp_wmem \
+    net.core.netdev_max_backlog \
+    net.core.somaxconn \
+    net.ipv4.tcp_max_syn_backlog \
+    net.ipv4.tcp_mtu_probing \
+    net.ipv4.tcp_fastopen \
+    net.ipv4.tcp_slow_start_after_idle \
+    net.ipv4.tcp_keepalive_time \
+    net.ipv4.tcp_keepalive_intvl \
+    net.ipv4.tcp_keepalive_probes \
+    net.ipv4.tcp_retries2
+
+  if command -v tc >/dev/null 2>&1; then
+    log "tc qdisc show:"
+    tc qdisc show || true
+  fi
+}
+
+disable_network_sysctl() {
+  [[ -f "${SYSCTL_DROPIN}" ]] || return 0
+
+  step "Network tuning / Отключение профиля"
+  rm -f "${SYSCTL_DROPIN}"
+  SYSCTL_BACKUP_DIR=""
+
+  log "Removed managed network sysctl profile ${SYSCTL_DROPIN}."
+  sysctl --system || true
+  restore_network_sysctl_baseline || true
+  rm -f "${SYSCTL_BASELINE_FILE}"
+  warn_user "Managed network tuning profile was removed and baseline sysctl values were restored. / Профиль удалён, базовые sysctl-значения восстановлены."
+}
+
+configure_network_sysctl() {
+  local already_managed="no"
+
+  [[ -f "${SYSCTL_DROPIN}" ]] && already_managed="yes"
+
+  if [[ "${ENABLE_NETWORK_TUNING}" != "yes" ]]; then
+    disable_network_sysctl
+    return 0
+  fi
+
+  step "Network tuning / Sysctl"
+  if [[ "${already_managed}" != "yes" ]]; then
+    capture_network_sysctl_baseline
+  fi
+  backup_network_sysctl_conflicts
+  write_network_sysctl_profile
+  apply_network_sysctl_profile
+  log_network_tuning_status
+}
+
+print_runtime_status() {
+  local ssh_user_status="no"
+
+  [[ -n "${ADMIN_USER}" ]] && ssh_user_status="yes"
+
+  step "Summary / Сводка"
+  say "SSH:"
+  say "  Port / Порт: ${SSH_PORT}"
+  say "  Root login disabled / Root login отключён: $(bool_or_no "${STRICT_SSH_HARDENING}")"
+  say "  Password auth disabled / Парольный вход отключён: $(bool_or_no "${STRICT_SSH_HARDENING}")"
+  say "  Admin user prepared / Admin-пользователь подготовлен: $(bool_or_no "${ssh_user_status}")"
+
+  say "UFW / Firewall:"
+  say "  Extra TCP ports / Доп. TCP-порты: $(csv_or_none "${ALLOW_TCP_PORTS}")"
+  say "  Extra UDP ports / Доп. UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
+  if command -v ufw >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && say "  ${line}"
+    done < <(ufw status numbered 2>/dev/null | sed '1d')
+  fi
+
+  say "Fail2Ban / Защита SSH:"
+  if command -v fail2ban-client >/dev/null 2>&1; then
+    while IFS= read -r line; do
+      [[ -n "${line}" ]] && say "  ${line}"
+    done < <(fail2ban-client status sshd 2>/dev/null | head -n 10 || true)
+  fi
+
+  say "Network tuning / Сетевой профиль:"
+  say "  Enabled / Включён: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
+  if [[ "${ENABLE_NETWORK_TUNING}" == "yes" ]]; then
+    say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
+    say "  Profile file / Файл профиля: ${SYSCTL_DROPIN}"
+    say "  Backup dir / Каталог backup: $(value_or_none "${SYSCTL_BACKUP_DIR}")"
+    say "  BBR / congestion control: $(sysctl_value_or_unknown net.ipv4.tcp_congestion_control)"
+    say "  fq / default_qdisc: $(sysctl_value_or_unknown net.core.default_qdisc)"
+    say "  tcp_fastopen: $(sysctl_value_or_unknown net.ipv4.tcp_fastopen)"
+    say "  tcp_mtu_probing: $(sysctl_value_or_unknown net.ipv4.tcp_mtu_probing)"
+  fi
 }
 
 main() {
   require_root
+  tty_require
   console_init
-  bootstrap_tui
-  tui_init
 
-  # Do NOT start gauge before interactive dialogs (would block whiptail <"$TTY_DEV" >"$TTY_DEV" input).
+  trap on_exit EXIT
+  trap on_int INT
 
   interactive_setup
-  confirm_or_exit
-
-  gauge_start
-  gauge_update 0 "Initializing..."
+  confirm_configuration
 
   apt_update_and_upgrade
   apt_install
 
-  configure_sshd
-  checkpoint_optional_pause
+  ensure_admin_user
+  install_admin_keys
+
+  configure_ssh_bootstrap
+  checkpoint_ssh_access
+  configure_ssh_final
+
   configure_ufw
   configure_fail2ban
-
-  gauge_stop
-
-  finalize_tui
-step "DONE / ГОТОВО"
+  configure_network_sysctl
 
   print_runtime_status
-
-  warn "🇷🇺 Если менял SSH порт — проверь вход по новому порту в отдельной сессии."
-  warn "🇬🇧 If you changed SSH port — verify login on the new port in a separate session."
-
-  tui_msg "Done" "🇷🇺 Готово.\n\n🇬🇧 Done."
-}
-print_runtime_status() {
-  # печатаем строго в "консоль", а не в общий stdout (который у тебя залогирован)
-  local out_fd="${CONSOLE_FD:-}"
-  if [[ -z "${out_fd}" ]]; then
-    # fallback: если вдруг CONSOLE_FD пуст, пробуем TTY_DEV, иначе /dev/tty
-    if [[ -n "${TTY_DEV:-}" && -w "${TTY_DEV:-}" ]]; then
-      out_fd=""
-      exec 3>"${TTY_DEV}" || true
-      out_fd="3"
-    else
-      out_fd=""
-      exec 3>/dev/tty || true
-      out_fd="3"
-    fi
-  fi
-
-  {
-    printf "\n"
-    printf "============================================================\n"
-    printf "RUNTIME STATUS\n"
-    printf "============================================================\n\n"
-
-    printf "SSH / SSHD\n"
-    printf "SSH listening port(s):\n"
-    ss -lntp 2>/dev/null | awk '/sshd/ {print $4}' | sed 's/.*://g' | sort -u | sed 's/^/  - /' || printf "  - unknown\n"
-
-    printf "\nUFW\n"
-    printf "Allowed UFW rules:\n"
-    if command -v ufw >/dev/null 2>&1; then
-      ufw status numbered 2>/dev/null | sed '1d' | sed 's/^/  /' || printf "  UFW inactive\n"
-    else
-      printf "  UFW not installed\n"
-    fi
-
-    printf "\nFail2Ban (sshd)\n"
-    if [[ -f /etc/fail2ban/jail.d/sshd.local ]]; then
-      printf "sshd jail port:\n"
-      grep -E '^port' /etc/fail2ban/jail.d/sshd.local | sed 's/^/  /' || true
-    else
-      printf "  Fail2Ban SSH jail not configured\n"
-    fi
-
-    printf "\n============================================================\n"
-  } >&${out_fd}
-
-  # если мы открывали fd 3 сами — закроем
-  if [[ "${out_fd}" == "3" ]]; then
-    exec 3>&- || true
-  fi
 }
 
-# --- entrypoint ---
-# stdin-safe "sourced vs executed" guard:
-# - when sourced: `return` succeeds -> do nothing
-# - when executed (including `curl | bash`): `return` fails -> run main
-if ( return 0 2>/dev/null ); then
-  :
-else
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   main "$@"
 fi
-
-
-finalize_tui() {
-  # hard TUI restore
-  gauge_stop 2>/dev/null || true
-  stty sane 2>/dev/null || true
-  tput sgr0 2>/dev/null || true
-  tput cnorm 2>/dev/null || true
-  tput rmcup 2>/dev/null || true
-  : # no clear here
-  printf "\n" 2>/dev/null || true
-}
