@@ -52,16 +52,18 @@ Typical local paths:
 - Windows private key: `%USERPROFILE%\.ssh\id_ed25519`
 - Windows public key: `%USERPROFILE%\.ssh\id_ed25519.pub`
 
+If you use `MobaXterm`, `MobaKeyGen` is also fine. Generate the key there, keep the private key on your PC, and copy the OpenSSH public key line from the generator window into the server prompt.
+
 If you do not have a key yet, create one on your own machine:
 
 ```bash
 ssh-keygen -t ed25519 -C "<label>"
 ```
 
-If you are on Windows and want a simpler flow, this repository also includes:
+If you are on Windows and do not want to use `MobaXterm`, this repository also includes:
 
 ```powershell
-.\generate-ssh-key.ps1
+.\generate-ssh-key.cmd
 ```
 
 That helper can:
@@ -73,8 +75,10 @@ That helper can:
 Example for an existing private key:
 
 ```powershell
-.\generate-ssh-key.ps1 -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
+.\generate-ssh-key.cmd -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
 ```
+
+If you prefer to run PowerShell directly, you can still use `.\generate-ssh-key.ps1`, but `.\generate-ssh-key.cmd` is the easier option for beginners because the window stays open until you press Enter.
 
 ## Quick Start
 
@@ -111,10 +115,13 @@ chmod +x hardening.sh
 sudo ./hardening.sh
 ```
 
-If you are on Windows and still need an SSH key before step 4, open a local PowerShell window on your own computer and run:
+If you are on Windows and still need an SSH key before step 4, you have two normal options on your own computer:
+
+1. Use `MobaXterm` / `MobaKeyGen`, then copy the OpenSSH public key line.
+2. Use the local helper below:
 
 ```powershell
-.\generate-ssh-key.ps1
+.\generate-ssh-key.cmd
 ```
 
 Then open the generated `.pub.txt` file from `%USERPROFILE%\.ssh` and paste its contents into the server prompt.

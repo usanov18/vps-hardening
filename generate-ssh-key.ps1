@@ -7,14 +7,23 @@ param(
   [string]$Algorithm = "ed25519",
   [string]$FromExistingPrivateKey = "",
   [switch]$NoPassphrase,
+  [switch]$PauseOnExit,
   [switch]$Overwrite
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+function Wait-BeforeExit {
+  if ($PauseOnExit) {
+    Write-Host ""
+    [void](Read-Host "Press Enter to close")
+  }
+}
+
 function Fail($Message) {
   Write-Error $Message
+  Wait-BeforeExit
   exit 1
 }
 
@@ -126,13 +135,21 @@ function Export-ExistingPublicKey($SshKeygenPath, $PrivateKeyPath) {
   Write-PublicKeyArtifacts -PrivateKeyPath $PrivateKeyPath
 }
 
-$sshKeygen = Ensure-SshKeygen
-Ensure-KeyDir -Path $KeyDir
+try {
+  $sshKeygen = Ensure-SshKeygen
+  Ensure-KeyDir -Path $KeyDir
 
-if (-not [string]::IsNullOrWhiteSpace($FromExistingPrivateKey)) {
-  Export-ExistingPublicKey -SshKeygenPath $sshKeygen -PrivateKeyPath $FromExistingPrivateKey
-  exit 0
+  if (-not [string]::IsNullOrWhiteSpace($FromExistingPrivateKey)) {
+    Export-ExistingPublicKey -SshKeygenPath $sshKeygen -PrivateKeyPath $FromExistingPrivateKey
+    Wait-BeforeExit
+    exit 0
+  }
+
+  $privateKeyPath = Join-Path $KeyDir $KeyName
+  Generate-NewKey -SshKeygenPath $sshKeygen -PrivateKeyPath $privateKeyPath
+  Wait-BeforeExit
+} catch {
+  Write-Error $_
+  Wait-BeforeExit
+  exit 1
 }
-
-$privateKeyPath = Join-Path $KeyDir $KeyName
-Generate-NewKey -SshKeygenPath $sshKeygen -PrivateKeyPath $privateKeyPath

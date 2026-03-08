@@ -52,16 +52,18 @@ Terminal-first bootstrap и hardening для свежего Ubuntu VPS.
 - Windows private key: `%USERPROFILE%\.ssh\id_ed25519`
 - Windows public key: `%USERPROFILE%\.ssh\id_ed25519.pub`
 
+Если ты используешь `MobaXterm`, встроенный `MobaKeyGen` тоже подходит. Сгенерируй ключ там, приватный ключ оставь на своём ПК, а в серверный prompt вставь OpenSSH public key строку из окна генератора.
+
 Если ключа ещё нет, создай его на своей машине:
 
 ```bash
 ssh-keygen -t ed25519 -C "<label>"
 ```
 
-Если ты на Windows и хочешь более простой сценарий, в репозитории есть helper:
+Если ты на Windows и не хочешь использовать `MobaXterm`, в репозитории есть helper:
 
 ```powershell
-.\generate-ssh-key.ps1
+.\generate-ssh-key.cmd
 ```
 
 Он умеет:
@@ -73,8 +75,10 @@ ssh-keygen -t ed25519 -C "<label>"
 Пример для уже существующего private key:
 
 ```powershell
-.\generate-ssh-key.ps1 -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
+.\generate-ssh-key.cmd -FromExistingPrivateKey "$env:USERPROFILE\.ssh\535c801bbc" -Overwrite
 ```
+
+Если удобнее запускать PowerShell напрямую, можно использовать и `.\generate-ssh-key.ps1`, но `.\generate-ssh-key.cmd` проще для новичка: окно не закроется сразу и дождётся `Enter`.
 
 ## Быстрый Старт
 
@@ -111,10 +115,13 @@ chmod +x hardening.sh
 sudo ./hardening.sh
 ```
 
-Если ты на Windows и к шагу 4 у тебя ещё нет SSH-ключа, открой локальный PowerShell на своём компьютере и выполни:
+Если ты на Windows и к шагу 4 у тебя ещё нет SSH-ключа, у тебя есть два нормальных варианта на своём компьютере:
+
+1. Использовать `MobaXterm` / `MobaKeyGen`, а потом скопировать OpenSSH public key строку.
+2. Использовать локальный helper ниже:
 
 ```powershell
-.\generate-ssh-key.ps1
+.\generate-ssh-key.cmd
 ```
 
 После этого открой созданный `.pub.txt` в `%USERPROFILE%\.ssh` и вставь его содержимое в prompt на сервере.

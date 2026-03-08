@@ -314,10 +314,11 @@ show_public_key_help() {
   say "  Next prompt expects one line from a .pub file. Следующий prompt ждёт одну строку из .pub."
   say "  Linux/macOS: ~/.ssh/id_ed25519 and ~/.ssh/id_ed25519.pub"
   say "  Windows: %USERPROFILE%\\.ssh\\id_ed25519 and id_ed25519.pub"
+  say "  Windows option: MobaXterm/MobaKeyGen -> copy the OpenSSH public key line."
   say "  Generate locally if needed: ssh-keygen -t ed25519 -C \"<label>\""
-  say "  Windows helper in this repo: generate-ssh-key.ps1"
-  say "  It can create a new key pair or export .pub/.pub.txt from an existing private key."
-  say "  Example: .\\generate-ssh-key.ps1 -FromExistingPrivateKey \"%USERPROFILE%\\.ssh\\mykey\" -Overwrite"
+  say "  Windows launcher in this repo: generate-ssh-key.cmd"
+  say "  It opens a local helper, creates a key pair, or exports .pub/.pub.txt from an existing private key."
+  say "  Example: .\\generate-ssh-key.cmd -FromExistingPrivateKey \"%USERPROFILE%\\.ssh\\mykey\" -Overwrite"
 }
 
 show_network_tuning_help() {

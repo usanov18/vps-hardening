@@ -11,7 +11,9 @@ Full beginner guides are available in both languages:
 
 Windows local helper for SSH keys:
 
-- [generate-ssh-key.ps1](generate-ssh-key.ps1) creates a key pair or exports `.pub` and `.pub.txt` from an existing private key.
+- On Windows, `MobaXterm` and `MobaKeyGen` also work well. Copy the OpenSSH public key line into the server prompt.
+- [generate-ssh-key.cmd](generate-ssh-key.cmd) is the easiest Windows launcher. Double-click it or run it from `cmd` or PowerShell.
+- [generate-ssh-key.ps1](generate-ssh-key.ps1) is the underlying PowerShell script used by the launcher.
 
 ## Language
 
