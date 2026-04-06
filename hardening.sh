@@ -1065,10 +1065,30 @@ configure_ufw() {
   fi
 }
 
+current_ssh_client_ip() {
+  local ip=""
+
+  if [[ -n "${SSH_CONNECTION:-}" ]]; then
+    ip="$(awk '{print $1}' <<< "${SSH_CONNECTION}")"
+  elif [[ -n "${SSH_CLIENT:-}" ]]; then
+    ip="$(awk '{print $1}' <<< "${SSH_CLIENT}")"
+  fi
+
+  [[ "${ip}" =~ ^[0-9A-Fa-f:.]+$ ]] || return 1
+  printf '%s\n' "${ip}"
+}
+
 configure_fail2ban() {
+  local ignore_ip_line="127.0.0.1/8 ::1"
+  local current_ip=""
   step "Fail2Ban / Настройка"
 
   mkdir -p /etc/fail2ban/jail.d
+
+  current_ip="$(current_ssh_client_ip 2>/dev/null || true)"
+  if [[ -n "${current_ip}" ]]; then
+    ignore_ip_line+=" ${current_ip}"
+  fi
 
   cat > "${FAIL2BAN_DROPIN}" <<EOF
 [DEFAULT]
@@ -1078,7 +1098,7 @@ bantime = 12h
 findtime = 10m
 maxretry = 4
 usedns = warn
-ignoreip = 127.0.0.1/8 ::1
+ignoreip = ${ignore_ip_line}
 
 [sshd]
 enabled = true
