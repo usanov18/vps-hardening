@@ -21,6 +21,7 @@ CURRENT_STEP="startup"
 SSH_PORT="22"
 ALLOW_TCP_PORTS=""
 ALLOW_UDP_PORTS=""
+TARGET_HOSTNAME=""
 ADMIN_USER=""
 COPY_ROOT_KEYS="no"
 COPY_SUDO_USER_KEYS="no"
@@ -418,6 +419,7 @@ reset_saved_answers() {
   SSH_PORT=""
   ALLOW_TCP_PORTS=""
   ALLOW_UDP_PORTS=""
+  TARGET_HOSTNAME=""
   ADMIN_USER=""
   ENABLE_NETWORK_TUNING=""
   ENABLE_IP_FORWARD=""
@@ -446,6 +448,7 @@ load_state() {
       SSH_PORT) SSH_PORT="${value}" ;;
       ALLOW_TCP_PORTS) ALLOW_TCP_PORTS="${value}" ;;
       ALLOW_UDP_PORTS) ALLOW_UDP_PORTS="${value}" ;;
+      TARGET_HOSTNAME) TARGET_HOSTNAME="${value}" ;;
       ADMIN_USER) ADMIN_USER="${value}" ;;
       ENABLE_NETWORK_TUNING) ENABLE_NETWORK_TUNING="${value}" ;;
       ENABLE_IP_FORWARD) ENABLE_IP_FORWARD="${value}" ;;
@@ -460,6 +463,7 @@ save_state() {
 SSH_PORT=${SSH_PORT}
 ALLOW_TCP_PORTS=${ALLOW_TCP_PORTS}
 ALLOW_UDP_PORTS=${ALLOW_UDP_PORTS}
+TARGET_HOSTNAME=${TARGET_HOSTNAME}
 ADMIN_USER=${ADMIN_USER}
 ENABLE_NETWORK_TUNING=${ENABLE_NETWORK_TUNING}
 ENABLE_IP_FORWARD=${ENABLE_IP_FORWARD}
@@ -470,6 +474,35 @@ EOF
 
 guess_primary_ip() {
   hostname -I 2>/dev/null | awk '{print $1}'
+}
+
+current_static_hostname() {
+  local value=""
+
+  value="$(hostnamectl --static 2>/dev/null || hostname 2>/dev/null || true)"
+  trim "${value}"
+}
+
+valid_hostname() {
+  local value="$1"
+
+  [[ ${#value} -le 253 ]] || return 1
+  [[ "${value}" =~ ^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*$ ]]
+}
+
+prompt_hostname() {
+  local prompt="$1"
+  local default="$2"
+  local value=""
+
+  while true; do
+    value="$(prompt_line "${prompt}" "${default}")"
+    if valid_hostname "${value}"; then
+      printf '%s\n' "${value}"
+      return 0
+    fi
+    say "Используй hostname в Linux-формате: строчные буквы, цифры, дефис и точка."
+  done
 }
 
 port_has_tcp_listener() {
@@ -606,6 +639,7 @@ planned_key_material_available() {
 
 interactive_setup() {
   local default_ssh="22"
+  local default_hostname=""
   local default_admin="deploy"
   local sudo_keys=""
   local session_login_user=""
@@ -628,6 +662,7 @@ interactive_setup() {
     say "  SSH port / SSH-порт: ${SSH_PORT}"
     say "  TCP ports / TCP-порты: $(csv_or_none "${ALLOW_TCP_PORTS}")"
     say "  UDP ports / UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
+    say "  Имя сервера: $(value_or_none "${TARGET_HOSTNAME}")"
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
     say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
@@ -646,6 +681,8 @@ interactive_setup() {
   fi
 
   SSH_PORT="$(state_set_if_present "${SSH_PORT}" "${default_ssh}")"
+  default_hostname="$(current_static_hostname)"
+  TARGET_HOSTNAME="$(state_set_if_present "${TARGET_HOSTNAME}" "${default_hostname}")"
   ADMIN_USER="$(state_set_if_present "${ADMIN_USER}" "${default_admin}")"
   ENABLE_NETWORK_TUNING="$(state_set_if_present "${ENABLE_NETWORK_TUNING}" "${network_default}")"
   ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
@@ -654,6 +691,7 @@ interactive_setup() {
   session_login_user="$(current_session_login_user 2>/dev/null || true)"
 
   SSH_PORT="$(prompt_ssh_port "${SSH_PORT}")"
+  TARGET_HOSTNAME="$(prompt_hostname "Имя сервера / Hostname" "${TARGET_HOSTNAME}")"
   ALLOW_TCP_PORTS="$(prompt_port_specs "Extra TCP ports / Доп. TCP-порты (comma-separated, blank = none)" "${ALLOW_TCP_PORTS}")"
   ALLOW_UDP_PORTS="$(prompt_port_specs "Extra UDP ports / Доп. UDP-порты (comma-separated, blank = none)" "${ALLOW_UDP_PORTS}")"
 
@@ -731,6 +769,7 @@ confirm_configuration() {
   step "Review / Проверка плана"
   say "Planned changes / Что будет применено:"
   say "  SSH port / SSH-порт: ${SSH_PORT}"
+  say "  Имя сервера: ${TARGET_HOSTNAME}"
   say "  Extra TCP ports / Доп. TCP-порты: $(csv_or_none "${ALLOW_TCP_PORTS}")"
   say "  Extra UDP ports / Доп. UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
 
@@ -778,6 +817,66 @@ apt_install() {
     openssh-server sudo ufw fail2ban \
     ca-certificates curl gnupg lsb-release \
     git jq unzip htop nano iproute2
+}
+
+hosts_hostname_line() {
+  local hostname_value="$1"
+  local short_name="${hostname_value%%.*}"
+
+  if [[ "${short_name}" != "${hostname_value}" ]]; then
+    printf '127.0.1.1\t%s %s\n' "${hostname_value}" "${short_name}"
+  else
+    printf '127.0.1.1\t%s\n' "${hostname_value}"
+  fi
+}
+
+sync_hosts_hostname() {
+  local hostname_value="$1"
+  local tmp=""
+  local hosts_line=""
+
+  hosts_line="$(hosts_hostname_line "${hostname_value}")"
+  tmp="$(mktemp)"
+
+  [[ -f /etc/hosts ]] || touch /etc/hosts
+
+  awk -v newline="${hosts_line}" '
+    BEGIN { replaced = 0 }
+    $1 == "127.0.1.1" {
+      if (!replaced) {
+        print newline
+        replaced = 1
+      }
+      next
+    }
+    { print }
+    END {
+      if (!replaced) {
+        print newline
+      }
+    }
+  ' /etc/hosts > "${tmp}"
+
+  install -m 644 "${tmp}" /etc/hosts
+  rm -f "${tmp}"
+}
+
+configure_hostname() {
+  local current_hostname=""
+
+  [[ -n "${TARGET_HOSTNAME}" ]] || return 0
+
+  step "Hostname / Имя сервера"
+
+  current_hostname="$(current_static_hostname)"
+  if [[ "${current_hostname}" == "${TARGET_HOSTNAME}" ]]; then
+    log "Hostname already set to ${TARGET_HOSTNAME}; syncing /etc/hosts."
+  else
+    log "Changing hostname from ${current_hostname:-unknown} to ${TARGET_HOSTNAME}."
+    hostnamectl set-hostname "${TARGET_HOSTNAME}"
+  fi
+
+  sync_hosts_hostname "${TARGET_HOSTNAME}"
 }
 
 ensure_admin_user() {
@@ -1483,10 +1582,15 @@ configure_network_sysctl() {
 
 print_runtime_status() {
   local ssh_user_status="no"
+  local runtime_hostname=""
 
   [[ -n "${ADMIN_USER}" ]] && ssh_user_status="yes"
+  runtime_hostname="$(current_static_hostname 2>/dev/null || true)"
 
   step "Summary / Сводка"
+  say "Хост:"
+  say "  Имя сервера: $(value_or_none "${runtime_hostname}")"
+
   say "SSH:"
   say "  Port / Порт: ${SSH_PORT}"
   say "  Root login disabled / Root login отключён: $(bool_or_no "${STRICT_SSH_HARDENING}")"
@@ -1536,6 +1640,7 @@ main() {
   apt_update_and_upgrade
   apt_install
 
+  configure_hostname
   ensure_admin_user
   install_admin_keys
 
