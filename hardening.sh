@@ -605,10 +605,10 @@ interactive_setup() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
     say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
-    say "  Delete other users / Удалять других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
+    say "  Удалять других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
     say_blank
 
-    if ! prompt_yesno "Start from a clean slate instead of saved values? / Начать с чистого листа вместо сохранённых значений?" "yes"; then
+    if ! prompt_yesno "Начать с чистого листа и не использовать сохранённые значения?" "yes"; then
       use_saved_values="yes"
     else
       PREV_SSH_PORT=""
@@ -664,11 +664,11 @@ interactive_setup() {
     done < <(list_other_regular_users "${ADMIN_USER}")
 
     if ((${#cleanup_users[@]})); then
-      say "Other regular users on this server / Другие обычные пользователи на сервере:"
+      say "Другие обычные пользователи на сервере:"
       for cleanup_user in "${cleanup_users[@]}"; do
         say "  ${cleanup_user}"
       done
-      prompt_yesno "Delete these users after a successful admin login check? / Удалить этих пользователей после успешной проверки admin-входа?" "no" && DELETE_OTHER_USERS="yes" || DELETE_OTHER_USERS="no"
+      prompt_yesno "Удалить этих пользователей после успешной проверки входа под ${ADMIN_USER}?" "no" && DELETE_OTHER_USERS="yes" || DELETE_OTHER_USERS="no"
     else
       DELETE_OTHER_USERS="no"
     fi
@@ -709,7 +709,7 @@ confirm_configuration() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Passwordless sudo / Sudo без пароля: yes / да"
     say "  Disable root/password login after check / Отключить root/password после проверки: $(bool_or_no "${STRICT_SSH_HARDENING}")"
-    say "  Delete other users after admin check / Удалить других пользователей после проверки admin: $(bool_or_no "${DELETE_OTHER_USERS}")"
+    say "  Удалить других пользователей после проверки входа под ${ADMIN_USER}: $(bool_or_no "${DELETE_OTHER_USERS}")"
     if [[ "${DELETE_OTHER_USERS}" == "yes" ]]; then
       while IFS= read -r cleanup_user; do
         [[ -n "${cleanup_user}" ]] && say "    - ${cleanup_user}"
@@ -854,11 +854,11 @@ delete_other_regular_users() {
   [[ "${DELETE_OTHER_USERS}" == "yes" && -n "${ADMIN_USER}" ]] || return 0
 
   if [[ "${SSH_TEST_CONFIRMED}" != "yes" ]]; then
-    warn_user "User cleanup was skipped because the admin SSH login was not confirmed. / Удаление пользователей пропущено: вход admin не подтверждён."
+    warn_user "Удаление пользователей пропущено: вход под admin-пользователем не подтверждён."
     return 0
   fi
 
-  step "User cleanup / Удаление пользователей"
+  step "Удаление пользователей"
 
   while IFS= read -r user; do
     [[ -n "${user}" ]] || continue
@@ -866,23 +866,23 @@ delete_other_regular_users() {
 
     if [[ "${user}" == "${current_login}" ]]; then
       queue_deferred_user_deletion "${user}"
-      say "  ${user} -> deferred until this run exits / удалю после завершения этого запуска"
-      log "Deferred deletion scheduled for current login user ${user}."
+      say "  ${user} -> удалю после завершения этого запуска"
+      log "Отложено удаление текущего пользователя ${user} до завершения запуска."
       continue
     fi
 
     pkill -u "${user}" >/dev/null 2>&1 || true
     if userdel -r -f "${user}" >/dev/null 2>&1; then
       say "  ${user} -> deleted / удалён"
-      log "Deleted user ${user}."
+      log "Удалён пользователь ${user}."
     else
-      warn_user "Could not delete user ${user}; continuing. / Не удалось удалить пользователя ${user}, продолжаю."
-      log "Failed to delete user ${user}."
+      warn_user "Не удалось удалить пользователя ${user}, продолжаю."
+      log "Не удалось удалить пользователя ${user}."
     fi
   done < <(list_other_regular_users "${ADMIN_USER}")
 
   if [[ "${found}" != "yes" ]]; then
-    say "No other regular users to delete. / Других обычных пользователей для удаления нет."
+    say "Других обычных пользователей для удаления нет."
   fi
 }
 
@@ -896,7 +896,7 @@ run_deferred_user_deletions() {
   for user in "${users[@]}"; do
     [[ -n "${user}" ]] || continue
     nohup bash -c "sleep 5; pkill -u '${user}' >/dev/null 2>&1 || true; userdel -r -f '${user}' >>'${LOG_FILE}' 2>&1 || true" >/dev/null 2>&1 &
-    log "Started deferred deletion worker for ${user}."
+    log "Запущено отложенное удаление пользователя ${user}."
   done
 }
 
