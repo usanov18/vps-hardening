@@ -442,7 +442,11 @@ get_port_listeners() {
 
 port_listener_is_sshd() {
   local port="$1"
-  get_port_listeners "${port}" | grep -q 'sshd'
+  local listeners=""
+
+  listeners="$(get_port_listeners "${port}")"
+  grep -q 'sshd' <<< "${listeners}" && return 0
+  ssh_socket_managed && grep -q 'systemd' <<< "${listeners}"
 }
 
 prompt_ssh_port() {
@@ -793,11 +797,12 @@ write_sshd_config() {
   } > "${SSHD_DROPIN}"
 }
 
-assert_listening_port_ipv4() {
+assert_listening_port() {
   local port="$1"
 
-  ss -lnt 2>/dev/null | awk -v p=":${port}" '
-    $1=="LISTEN" && $4 ~ (p"$") && $4 !~ /^\[::\]/ { ok=1 }
+  # Newer Ubuntu images may expose ssh.socket as [::]:PORT or *:PORT.
+  ss -lntH "sport = :${port}" 2>/dev/null | awk '
+    $1=="LISTEN" && $4 !~ /^(127\.0\.0\.1:|\[::1\]:)/ { ok=1 }
     END { exit(ok ? 0 : 1) }
   '
 }
@@ -832,9 +837,9 @@ configure_ssh_bootstrap() {
   sshd -t
   reload_ssh_stack
 
-  assert_listening_port_ipv4 "22" || die "SSH is not listening on IPv4 port 22. / SSH не слушает IPv4 на порту 22."
+  assert_listening_port "22" || die "SSH is not listening on port 22 after reload. / После reload SSH не слушает порт 22."
   if [[ "${SSH_PORT}" != "22" ]]; then
-    assert_listening_port_ipv4 "${SSH_PORT}" || die "SSH is not listening on IPv4 port ${SSH_PORT}. / SSH не слушает IPv4 на порту ${SSH_PORT}."
+    assert_listening_port "${SSH_PORT}" || die "SSH is not listening on port ${SSH_PORT} after reload. / После reload SSH не слушает порт ${SSH_PORT}."
   fi
 }
 
@@ -900,7 +905,7 @@ configure_ssh_final() {
   sshd -t
   reload_ssh_stack
 
-  assert_listening_port_ipv4 "${SSH_PORT}" || die "SSH is not listening on IPv4 port ${SSH_PORT} after finalization. / После финализации SSH не слушает IPv4 на порту ${SSH_PORT}."
+  assert_listening_port "${SSH_PORT}" || die "SSH is not listening on port ${SSH_PORT} after finalization. / После финализации SSH не слушает порт ${SSH_PORT}."
 }
 
 rewrite_ufw_icmp_block() {
