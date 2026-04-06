@@ -33,6 +33,8 @@ ENABLE_IP_FORWARD="yes"
 PRIMARY_IP=""
 PREV_SSH_PORT=""
 SYSCTL_BACKUP_DIR=""
+DELETE_OTHER_USERS="no"
+DEFERRED_DELETE_USERS=""
 
 require_root() {
   [[ ${EUID} -eq 0 ]] || { echo "Run as root. / Запусти от root." >&2; exit 1; }
@@ -412,6 +414,16 @@ value_or_none() {
   fi
 }
 
+reset_saved_answers() {
+  SSH_PORT=""
+  ALLOW_TCP_PORTS=""
+  ALLOW_UDP_PORTS=""
+  ADMIN_USER=""
+  ENABLE_NETWORK_TUNING=""
+  ENABLE_IP_FORWARD=""
+  DELETE_OTHER_USERS="no"
+}
+
 state_set_if_present() {
   local value="$1"
   local fallback="$2"
@@ -437,6 +449,7 @@ load_state() {
       ADMIN_USER) ADMIN_USER="${value}" ;;
       ENABLE_NETWORK_TUNING) ENABLE_NETWORK_TUNING="${value}" ;;
       ENABLE_IP_FORWARD) ENABLE_IP_FORWARD="${value}" ;;
+      DELETE_OTHER_USERS) DELETE_OTHER_USERS="${value}" ;;
     esac
   done < "${STATE_FILE}"
 }
@@ -450,6 +463,7 @@ ALLOW_UDP_PORTS=${ALLOW_UDP_PORTS}
 ADMIN_USER=${ADMIN_USER}
 ENABLE_NETWORK_TUNING=${ENABLE_NETWORK_TUNING}
 ENABLE_IP_FORWARD=${ENABLE_IP_FORWARD}
+DELETE_OTHER_USERS=${DELETE_OTHER_USERS}
 EOF
   chmod 600 "${STATE_FILE}"
 }
@@ -519,6 +533,20 @@ get_user_home() {
   getent passwd "$1" | awk -F: '{print $6}'
 }
 
+list_other_regular_users() {
+  local keep_user="${1:-}"
+
+  getent passwd | awk -F: -v keep="${keep_user}" '
+    $3 >= 1000 &&
+    $1 != "root" &&
+    $1 != "nobody" &&
+    $1 != keep &&
+    $7 !~ /(nologin|false)$/ {
+      print $1
+    }
+  '
+}
+
 user_has_authorized_keys() {
   local user="$1"
   local home=""
@@ -557,20 +585,17 @@ interactive_setup() {
   local sudo_keys=""
   local network_default="yes"
   local ip_forward_default="yes"
+  local use_saved_values="no"
+  local cleanup_user=""
+  local cleanup_users=()
 
   step "Configuration / Настройка"
-  load_state
   if [[ -f "${STATE_FILE}" ]]; then
+    load_state
     PREV_SSH_PORT="${SSH_PORT}"
   else
     PREV_SSH_PORT=""
   fi
-
-  SSH_PORT="$(state_set_if_present "${SSH_PORT}" "${default_ssh}")"
-  ADMIN_USER="$(state_set_if_present "${ADMIN_USER}" "${default_admin}")"
-  ENABLE_NETWORK_TUNING="$(state_set_if_present "${ENABLE_NETWORK_TUNING}" "${network_default}")"
-  ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
-  PRIMARY_IP="$(guess_primary_ip || true)"
 
   if [[ -f "${STATE_FILE}" ]]; then
     say "Previous run / Предыдущий запуск:"
@@ -580,8 +605,26 @@ interactive_setup() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
     say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
+    say "  Delete other users / Удалять других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
     say_blank
+
+    if ! prompt_yesno "Start from a clean slate instead of saved values? / Начать с чистого листа вместо сохранённых значений?" "yes"; then
+      use_saved_values="yes"
+    else
+      PREV_SSH_PORT=""
+    fi
   fi
+
+  if [[ "${use_saved_values}" != "yes" ]]; then
+    reset_saved_answers
+  fi
+
+  SSH_PORT="$(state_set_if_present "${SSH_PORT}" "${default_ssh}")"
+  ADMIN_USER="$(state_set_if_present "${ADMIN_USER}" "${default_admin}")"
+  ENABLE_NETWORK_TUNING="$(state_set_if_present "${ENABLE_NETWORK_TUNING}" "${network_default}")"
+  ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
+  DELETE_OTHER_USERS="$(state_set_if_present "${DELETE_OTHER_USERS}" "no")"
+  PRIMARY_IP="$(guess_primary_ip || true)"
 
   SSH_PORT="$(prompt_ssh_port "${SSH_PORT}")"
   ALLOW_TCP_PORTS="$(prompt_port_specs "Extra TCP ports / Доп. TCP-порты (comma-separated, blank = none)" "${ALLOW_TCP_PORTS}")"
@@ -614,12 +657,28 @@ interactive_setup() {
       STRICT_SSH_HARDENING="no"
       warn_user "No key material found for ${ADMIN_USER}; strict SSH lock-down will be skipped. / Для ${ADMIN_USER} не найден ключ, строгий SSH hardening будет пропущен."
     fi
+
+    cleanup_users=()
+    while IFS= read -r cleanup_user; do
+      [[ -n "${cleanup_user}" ]] && cleanup_users+=("${cleanup_user}")
+    done < <(list_other_regular_users "${ADMIN_USER}")
+
+    if ((${#cleanup_users[@]})); then
+      say "Other regular users on this server / Другие обычные пользователи на сервере:"
+      for cleanup_user in "${cleanup_users[@]}"; do
+        say "  ${cleanup_user}"
+      done
+      prompt_yesno "Delete these users after a successful admin login check? / Удалить этих пользователей после успешной проверки admin-входа?" "no" && DELETE_OTHER_USERS="yes" || DELETE_OTHER_USERS="no"
+    else
+      DELETE_OTHER_USERS="no"
+    fi
   else
     ADMIN_USER=""
     COPY_ROOT_KEYS="no"
     COPY_SUDO_USER_KEYS="no"
     PASTED_PUBLIC_KEY=""
     STRICT_SSH_HARDENING="no"
+    DELETE_OTHER_USERS="no"
   fi
 
   show_network_tuning_help
@@ -639,6 +698,7 @@ interactive_setup() {
 }
 
 confirm_configuration() {
+  local cleanup_user=""
   step "Review / Проверка плана"
   say "Planned changes / Что будет применено:"
   say "  SSH port / SSH-порт: ${SSH_PORT}"
@@ -649,6 +709,12 @@ confirm_configuration() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Passwordless sudo / Sudo без пароля: yes / да"
     say "  Disable root/password login after check / Отключить root/password после проверки: $(bool_or_no "${STRICT_SSH_HARDENING}")"
+    say "  Delete other users after admin check / Удалить других пользователей после проверки admin: $(bool_or_no "${DELETE_OTHER_USERS}")"
+    if [[ "${DELETE_OTHER_USERS}" == "yes" ]]; then
+      while IFS= read -r cleanup_user; do
+        [[ -n "${cleanup_user}" ]] && say "    - ${cleanup_user}"
+      done < <(list_other_regular_users "${ADMIN_USER}")
+    fi
   else
     say "  Admin user / Admin-пользователь: none / нет"
   fi
@@ -764,6 +830,74 @@ install_admin_keys() {
     STRICT_SSH_HARDENING="no"
     warn_user "Strict SSH lock-down was cancelled because keys are not ready. / Строгий SSH hardening отменён: ключи не подготовлены."
   fi
+}
+
+queue_deferred_user_deletion() {
+  local user="$1"
+
+  [[ -n "${user}" ]] || return 0
+  case ",${DEFERRED_DELETE_USERS}," in
+    *,"${user}",*) return 0 ;;
+  esac
+
+  if [[ -n "${DEFERRED_DELETE_USERS}" ]]; then
+    DEFERRED_DELETE_USERS+=","
+  fi
+  DEFERRED_DELETE_USERS+="${user}"
+}
+
+delete_other_regular_users() {
+  local user=""
+  local found="no"
+  local current_login="${SUDO_USER:-}"
+
+  [[ "${DELETE_OTHER_USERS}" == "yes" && -n "${ADMIN_USER}" ]] || return 0
+
+  if [[ "${SSH_TEST_CONFIRMED}" != "yes" ]]; then
+    warn_user "User cleanup was skipped because the admin SSH login was not confirmed. / Удаление пользователей пропущено: вход admin не подтверждён."
+    return 0
+  fi
+
+  step "User cleanup / Удаление пользователей"
+
+  while IFS= read -r user; do
+    [[ -n "${user}" ]] || continue
+    found="yes"
+
+    if [[ "${user}" == "${current_login}" ]]; then
+      queue_deferred_user_deletion "${user}"
+      say "  ${user} -> deferred until this run exits / удалю после завершения этого запуска"
+      log "Deferred deletion scheduled for current login user ${user}."
+      continue
+    fi
+
+    pkill -u "${user}" >/dev/null 2>&1 || true
+    if userdel -r -f "${user}" >/dev/null 2>&1; then
+      say "  ${user} -> deleted / удалён"
+      log "Deleted user ${user}."
+    else
+      warn_user "Could not delete user ${user}; continuing. / Не удалось удалить пользователя ${user}, продолжаю."
+      log "Failed to delete user ${user}."
+    fi
+  done < <(list_other_regular_users "${ADMIN_USER}")
+
+  if [[ "${found}" != "yes" ]]; then
+    say "No other regular users to delete. / Других обычных пользователей для удаления нет."
+  fi
+}
+
+run_deferred_user_deletions() {
+  local user=""
+  local users=()
+
+  [[ -n "${DEFERRED_DELETE_USERS}" ]] || return 0
+  IFS=',' read -r -a users <<< "${DEFERRED_DELETE_USERS}"
+
+  for user in "${users[@]}"; do
+    [[ -n "${user}" ]] || continue
+    nohup bash -c "sleep 5; pkill -u '${user}' >/dev/null 2>&1 || true; userdel -r -f '${user}' >>'${LOG_FILE}' 2>&1 || true" >/dev/null 2>&1 &
+    log "Started deferred deletion worker for ${user}."
+  done
 }
 
 ensure_run_sshd_dir() {
@@ -1378,12 +1512,14 @@ main() {
   configure_ssh_bootstrap
   checkpoint_ssh_access
   configure_ssh_final
+  delete_other_regular_users
 
   configure_ufw
   configure_fail2ban
   configure_network_sysctl
 
   print_runtime_status
+  run_deferred_user_deletions
 }
 
 if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
