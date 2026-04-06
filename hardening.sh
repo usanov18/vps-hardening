@@ -605,10 +605,10 @@ interactive_setup() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
     say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
-    say "  Удалять других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
+    say "  Удаление других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
     say_blank
 
-    if ! prompt_yesno "Начать с чистого листа и не использовать сохранённые значения?" "yes"; then
+    if ! prompt_yesno "Игнорировать сохранённые значения и начать заново?" "yes"; then
       use_saved_values="yes"
     else
       PREV_SSH_PORT=""
@@ -664,11 +664,11 @@ interactive_setup() {
     done < <(list_other_regular_users "${ADMIN_USER}")
 
     if ((${#cleanup_users[@]})); then
-      say "Другие обычные пользователи на сервере:"
+      say "Найдены другие пользователи:"
       for cleanup_user in "${cleanup_users[@]}"; do
         say "  ${cleanup_user}"
       done
-      prompt_yesno "Удалить этих пользователей после успешной проверки входа под ${ADMIN_USER}?" "no" && DELETE_OTHER_USERS="yes" || DELETE_OTHER_USERS="no"
+      prompt_yesno "Удалить этих пользователей после успешного входа под ${ADMIN_USER}?" "no" && DELETE_OTHER_USERS="yes" || DELETE_OTHER_USERS="no"
     else
       DELETE_OTHER_USERS="no"
     fi
@@ -709,7 +709,7 @@ confirm_configuration() {
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
     say "  Passwordless sudo / Sudo без пароля: yes / да"
     say "  Disable root/password login after check / Отключить root/password после проверки: $(bool_or_no "${STRICT_SSH_HARDENING}")"
-    say "  Удалить других пользователей после проверки входа под ${ADMIN_USER}: $(bool_or_no "${DELETE_OTHER_USERS}")"
+    say "  Удалить других пользователей после успешного входа под ${ADMIN_USER}: $(bool_or_no "${DELETE_OTHER_USERS}")"
     if [[ "${DELETE_OTHER_USERS}" == "yes" ]]; then
       while IFS= read -r cleanup_user; do
         [[ -n "${cleanup_user}" ]] && say "    - ${cleanup_user}"
@@ -854,7 +854,7 @@ delete_other_regular_users() {
   [[ "${DELETE_OTHER_USERS}" == "yes" && -n "${ADMIN_USER}" ]] || return 0
 
   if [[ "${SSH_TEST_CONFIRMED}" != "yes" ]]; then
-    warn_user "Удаление пользователей пропущено: вход под admin-пользователем не подтверждён."
+    warn_user "Удаление пользователей пропущено: новый вход не подтверждён."
     return 0
   fi
 
@@ -866,7 +866,7 @@ delete_other_regular_users() {
 
     if [[ "${user}" == "${current_login}" ]]; then
       queue_deferred_user_deletion "${user}"
-      say "  ${user} -> удалю после завершения этого запуска"
+      say "  ${user} -> будет удалён после завершения запуска"
       log "Отложено удаление текущего пользователя ${user} до завершения запуска."
       continue
     fi
@@ -882,7 +882,7 @@ delete_other_regular_users() {
   done < <(list_other_regular_users "${ADMIN_USER}")
 
   if [[ "${found}" != "yes" ]]; then
-    say "Других обычных пользователей для удаления нет."
+    say "Других пользователей для удаления нет."
   fi
 }
 
