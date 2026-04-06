@@ -46,6 +46,21 @@ tty_require() {
   tty_available || { echo "A real terminal is required. / Нужен реальный терминал." >&2; exit 1; }
 }
 
+grant_log_access_to_invoking_user() {
+  local user="${SUDO_USER:-}"
+  local group=""
+
+  [[ -n "${user}" && "${user}" != "root" ]] || return 0
+  id -u "${user}" >/dev/null 2>&1 || return 0
+
+  group="$(id -gn "${user}" 2>/dev/null || true)"
+  [[ -n "${group}" ]] || return 0
+
+  chgrp "${group}" "${LOG_DIR}" "${LOG_FILE}" 2>/dev/null || true
+  chmod 750 "${LOG_DIR}" || true
+  chmod 640 "${LOG_FILE}" || true
+}
+
 console_init() {
   mkdir -p "${LOG_DIR}"
   chmod 750 "${LOG_DIR}" || true
@@ -53,6 +68,7 @@ console_init() {
   LOG_FILE="${LOG_DIR}/run-$(date +%Y%m%d-%H%M%S).log"
   touch "${LOG_FILE}"
   chmod 600 "${LOG_FILE}" || true
+  grant_log_access_to_invoking_user
 
   exec {CONSOLE_FD}>&2
   if tty_available; then
