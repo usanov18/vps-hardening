@@ -323,6 +323,18 @@ valid_public_key() {
   [[ "$1" =~ ^(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp[0-9]+|sk-ecdsa-sha2-nistp256@openssh\.com|sk-ssh-ed25519@openssh\.com)[[:space:]][A-Za-z0-9+/=]+([[:space:]].*)?$ ]]
 }
 
+extract_public_keys() {
+  local source="$1"
+
+  [[ -f "${source}" ]] || return 0
+
+  awk '
+    match($0, /(ssh-(rsa|ed25519|dss)|ecdsa-sha2-nistp[0-9]+|sk-ecdsa-sha2-nistp256@openssh\.com|sk-ssh-ed25519@openssh\.com)[[:space:]][A-Za-z0-9+\/=]+([[:space:]].*)?$/) {
+      print substr($0, RSTART, RLENGTH)
+    }
+  ' "${source}"
+}
+
 show_public_key_help() {
   say "SSH key / SSH-ключ:"
   say "  Public key only (.pub). Только public key (.pub)."
@@ -718,17 +730,17 @@ install_admin_keys() {
   tmp="$(mktemp)"
 
   if [[ -f "${target}" ]]; then
-    cat "${target}" >> "${tmp}"
+    extract_public_keys "${target}" >> "${tmp}"
   fi
 
   if [[ "${COPY_ROOT_KEYS}" == "yes" && -f /root/.ssh/authorized_keys ]]; then
-    cat /root/.ssh/authorized_keys >> "${tmp}"
+    extract_public_keys /root/.ssh/authorized_keys >> "${tmp}"
   fi
 
   if [[ "${COPY_SUDO_USER_KEYS}" == "yes" ]]; then
     sudo_keys="$(sudo_user_keys_path 2>/dev/null || true)"
     if [[ -n "${sudo_keys}" ]]; then
-      cat "${sudo_keys}" >> "${tmp}"
+      extract_public_keys "${sudo_keys}" >> "${tmp}"
     fi
   fi
 
@@ -737,7 +749,7 @@ install_admin_keys() {
   fi
 
   if [[ -s "${tmp}" ]]; then
-    awk 'NF && !seen[$0]++' "${tmp}" > "${tmp}.uniq"
+    awk 'NF >= 2 && !seen[$1 " " $2]++' "${tmp}" > "${tmp}.uniq"
     install -m 600 -o "${ADMIN_USER}" -g "${ADMIN_USER}" "${tmp}.uniq" "${target}"
     ADMIN_KEYS_READY="yes"
     log "Authorized keys installed for ${ADMIN_USER}."
