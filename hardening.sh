@@ -533,6 +533,31 @@ get_user_home() {
   getent passwd "$1" | awk -F: '{print $6}'
 }
 
+current_session_login_user() {
+  local user=""
+
+  if [[ -n "${SUDO_USER:-}" && "${SUDO_USER}" != "root" ]] && user_exists "${SUDO_USER}"; then
+    printf '%s\n' "${SUDO_USER}"
+    return 0
+  fi
+
+  user="$(logname 2>/dev/null || true)"
+  user="$(trim "${user}")"
+  if [[ -n "${user}" && "${user}" != "root" ]] && user_exists "${user}"; then
+    printf '%s\n' "${user}"
+    return 0
+  fi
+
+  user="$(who -m 2>/dev/null | awk '{print $1}' || true)"
+  user="$(trim "${user}")"
+  if [[ -n "${user}" && "${user}" != "root" ]] && user_exists "${user}"; then
+    printf '%s\n' "${user}"
+    return 0
+  fi
+
+  return 1
+}
+
 list_other_regular_users() {
   local keep_user="${1:-}"
 
@@ -557,11 +582,11 @@ user_has_authorized_keys() {
 }
 
 sudo_user_keys_path() {
-  local user="${SUDO_USER:-}"
+  local user=""
   local home=""
 
-  [[ -n "${user}" && "${user}" != "root" ]] || return 1
-  user_exists "${user}" || return 1
+  user="$(current_session_login_user 2>/dev/null || true)"
+  [[ -n "${user}" ]] || return 1
   home="$(get_user_home "${user}")"
   [[ -n "${home}" && -f "${home}/.ssh/authorized_keys" ]] || return 1
   printf '%s\n' "${home}/.ssh/authorized_keys"
@@ -583,6 +608,7 @@ interactive_setup() {
   local default_ssh="22"
   local default_admin="deploy"
   local sudo_keys=""
+  local session_login_user=""
   local network_default="yes"
   local ip_forward_default="yes"
   local use_saved_values="no"
@@ -625,6 +651,7 @@ interactive_setup() {
   ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
   DELETE_OTHER_USERS="$(state_set_if_present "${DELETE_OTHER_USERS}" "no")"
   PRIMARY_IP="$(guess_primary_ip || true)"
+  session_login_user="$(current_session_login_user 2>/dev/null || true)"
 
   SSH_PORT="$(prompt_ssh_port "${SSH_PORT}")"
   ALLOW_TCP_PORTS="$(prompt_port_specs "Extra TCP ports / Доп. TCP-порты (comma-separated, blank = none)" "${ALLOW_TCP_PORTS}")"
@@ -640,8 +667,10 @@ interactive_setup() {
     fi
 
     if sudo_keys="$(sudo_user_keys_path 2>/dev/null || true)"; then
-      if [[ -n "${sudo_keys}" && "${SUDO_USER:-}" != "${ADMIN_USER}" ]]; then
-        prompt_yesno "Copy keys from ${SUDO_USER} to ${ADMIN_USER}? / Скопировать ключи пользователя ${SUDO_USER} в ${ADMIN_USER}?" "yes" && COPY_SUDO_USER_KEYS="yes" || COPY_SUDO_USER_KEYS="no"
+      if [[ -n "${sudo_keys}" && -n "${session_login_user}" && "${session_login_user}" != "${ADMIN_USER}" ]]; then
+        prompt_yesno "Copy keys from ${session_login_user} to ${ADMIN_USER}? / Скопировать ключи пользователя ${session_login_user} в ${ADMIN_USER}?" "yes" && COPY_SUDO_USER_KEYS="yes" || COPY_SUDO_USER_KEYS="no"
+      else
+        COPY_SUDO_USER_KEYS="no"
       fi
     else
       COPY_SUDO_USER_KEYS="no"
@@ -849,9 +878,10 @@ queue_deferred_user_deletion() {
 delete_other_regular_users() {
   local user=""
   local found="no"
-  local current_login="${SUDO_USER:-}"
+  local current_login=""
 
   [[ "${DELETE_OTHER_USERS}" == "yes" && -n "${ADMIN_USER}" ]] || return 0
+  current_login="$(current_session_login_user 2>/dev/null || true)"
 
   if [[ "${SSH_TEST_CONFIRMED}" != "yes" ]]; then
     warn_user "Удаление пользователей пропущено: новый вход не подтверждён."
