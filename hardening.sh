@@ -421,6 +421,7 @@ reset_saved_answers() {
   ALLOW_UDP_PORTS=""
   TARGET_HOSTNAME=""
   ADMIN_USER=""
+  STRICT_SSH_HARDENING=""
   ENABLE_NETWORK_TUNING=""
   ENABLE_IP_FORWARD=""
   DELETE_OTHER_USERS="no"
@@ -450,6 +451,7 @@ load_state() {
       ALLOW_UDP_PORTS) ALLOW_UDP_PORTS="${value}" ;;
       TARGET_HOSTNAME) TARGET_HOSTNAME="${value}" ;;
       ADMIN_USER) ADMIN_USER="${value}" ;;
+      STRICT_SSH_HARDENING) STRICT_SSH_HARDENING="${value}" ;;
       ENABLE_NETWORK_TUNING) ENABLE_NETWORK_TUNING="${value}" ;;
       ENABLE_IP_FORWARD) ENABLE_IP_FORWARD="${value}" ;;
       DELETE_OTHER_USERS) DELETE_OTHER_USERS="${value}" ;;
@@ -465,6 +467,7 @@ ALLOW_TCP_PORTS=${ALLOW_TCP_PORTS}
 ALLOW_UDP_PORTS=${ALLOW_UDP_PORTS}
 TARGET_HOSTNAME=${TARGET_HOSTNAME}
 ADMIN_USER=${ADMIN_USER}
+STRICT_SSH_HARDENING=${STRICT_SSH_HARDENING}
 ENABLE_NETWORK_TUNING=${ENABLE_NETWORK_TUNING}
 ENABLE_IP_FORWARD=${ENABLE_IP_FORWARD}
 DELETE_OTHER_USERS=${DELETE_OTHER_USERS}
@@ -646,6 +649,7 @@ interactive_setup() {
   local network_default="yes"
   local ip_forward_default="yes"
   local use_saved_values="no"
+  local edit_saved_values="no"
   local cleanup_user=""
   local cleanup_users=()
 
@@ -664,6 +668,7 @@ interactive_setup() {
     say "  UDP ports / UDP-порты: $(csv_or_none "${ALLOW_UDP_PORTS}")"
     say "  Имя сервера: $(value_or_none "${TARGET_HOSTNAME}")"
     say "  Admin user / Admin-пользователь: ${ADMIN_USER}"
+    say "  Строгий SSH: $(bool_or_no "${STRICT_SSH_HARDENING}")"
     say "  Network tuning / Сетевой профиль: $(bool_or_no "${ENABLE_NETWORK_TUNING}")"
     say "  IPv4 forwarding / Маршрутизация IPv4: $(bool_or_no "${ENABLE_IP_FORWARD}")"
     say "  Удаление других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
@@ -684,11 +689,35 @@ interactive_setup() {
   default_hostname="$(current_static_hostname)"
   TARGET_HOSTNAME="$(state_set_if_present "${TARGET_HOSTNAME}" "${default_hostname}")"
   ADMIN_USER="$(state_set_if_present "${ADMIN_USER}" "${default_admin}")"
+  STRICT_SSH_HARDENING="$(state_set_if_present "${STRICT_SSH_HARDENING}" "no")"
   ENABLE_NETWORK_TUNING="$(state_set_if_present "${ENABLE_NETWORK_TUNING}" "${network_default}")"
   ENABLE_IP_FORWARD="$(state_set_if_present "${ENABLE_IP_FORWARD}" "${ip_forward_default}")"
   DELETE_OTHER_USERS="$(state_set_if_present "${DELETE_OTHER_USERS}" "no")"
   PRIMARY_IP="$(guess_primary_ip || true)"
   session_login_user="$(current_session_login_user 2>/dev/null || true)"
+
+  if [[ "${use_saved_values}" == "yes" ]]; then
+    if prompt_yesno "Изменить сохранённые значения вручную?" "no"; then
+      edit_saved_values="yes"
+    else
+      COPY_ROOT_KEYS="no"
+      COPY_SUDO_USER_KEYS="no"
+      PASTED_PUBLIC_KEY=""
+
+      if [[ "${STRICT_SSH_HARDENING}" == "yes" ]] && ! planned_key_material_available; then
+        STRICT_SSH_HARDENING="no"
+        warn_user "Для сохранённого admin-пользователя не найден SSH-ключ, строгий SSH hardening будет пропущен."
+      fi
+
+      say "Использую сохранённые значения без повторного опроса."
+      save_state
+      return 0
+    fi
+  fi
+
+  if [[ "${edit_saved_values}" == "yes" ]]; then
+    say "Сохранённые значения загружены. Нажми Enter, чтобы оставить текущее значение."
+  fi
 
   SSH_PORT="$(prompt_ssh_port "${SSH_PORT}")"
   TARGET_HOSTNAME="$(prompt_hostname "Имя сервера / Hostname" "${TARGET_HOSTNAME}")"
