@@ -674,7 +674,7 @@ interactive_setup() {
     say "  Удаление других пользователей: $(bool_or_no "${DELETE_OTHER_USERS}")"
     say_blank
 
-    if ! prompt_yesno "Игнорировать сохранённые значения и начать заново?" "yes"; then
+    if prompt_yesno "Использовать сохранённые значения прошлого запуска?" "no"; then
       use_saved_values="yes"
     else
       PREV_SSH_PORT=""
@@ -709,7 +709,7 @@ interactive_setup() {
         warn_user "Для сохранённого admin-пользователя не найден SSH-ключ, строгий SSH hardening будет пропущен."
       fi
 
-      say "Использую сохранённые значения без повторного опроса."
+      say "Использую сохранённую конфигурацию без повторных вопросов."
       save_state
       return 0
     fi
