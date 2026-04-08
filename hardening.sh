@@ -1047,20 +1047,17 @@ ssh_socket_managed() {
   systemctl is-active --quiet ssh.socket || systemctl is-enabled ssh.socket >/dev/null 2>&1
 }
 
-write_ssh_socket_override() {
-  local ports=("$@")
-  local port=""
+disable_ssh_socket_activation() {
+  if systemctl list-unit-files ssh.socket >/dev/null 2>&1; then
+    systemctl stop ssh.socket >/dev/null 2>&1 || true
+    systemctl disable ssh.socket >/dev/null 2>&1 || true
+  fi
 
-  mkdir -p /etc/systemd/system/ssh.socket.d
+  rm -f "${SSH_SOCKET_DROPIN}" 2>/dev/null || true
+  rmdir /etc/systemd/system/ssh.socket.d >/dev/null 2>&1 || true
 
-  {
-    echo "[Socket]"
-    echo "ListenStream="
-    for port in "${ports[@]}"; do
-      echo "ListenStream=0.0.0.0:${port}"
-      echo "ListenStream=[::]:${port}"
-    done
-  } > "${SSH_SOCKET_DROPIN}"
+  systemctl unmask ssh.service >/dev/null 2>&1 || true
+  systemctl enable ssh.service >/dev/null 2>&1 || systemctl enable ssh >/dev/null 2>&1 || true
 }
 
 write_sshd_config() {
@@ -1098,15 +1095,34 @@ assert_listening_port() {
   '
 }
 
+assert_ssh_banner() {
+  local port="$1"
+
+  timeout 6 bash -lc '
+    exec 3<>"/dev/tcp/127.0.0.1/'"${port}"'"
+    IFS= read -r -t 5 banner <&3 || exit 1
+    [[ "${banner}" == SSH-* ]]
+  ' >/dev/null 2>&1
+}
+
+assert_ssh_ready() {
+  local port="$1"
+  local attempt=""
+
+  for attempt in 1 2 3 4 5 6 7 8; do
+    if assert_listening_port "${port}" && assert_ssh_banner "${port}"; then
+      return 0
+    fi
+    sleep 1
+  done
+
+  return 1
+}
+
 reload_ssh_stack() {
   systemctl daemon-reload
 
-  if ssh_socket_managed; then
-    systemctl restart ssh.socket
-    systemctl restart ssh || true
-  else
-    systemctl restart ssh
-  fi
+  systemctl restart ssh.service 2>/dev/null || systemctl restart ssh
 }
 
 configure_ssh_bootstrap() {
@@ -1119,18 +1135,15 @@ configure_ssh_bootstrap() {
   fi
 
   write_sshd_config "${ports[@]}"
-
-  if ssh_socket_managed; then
-    write_ssh_socket_override "${ports[@]:1}"
-  fi
+  disable_ssh_socket_activation
 
   ensure_run_sshd_dir
   sshd -t
   reload_ssh_stack
 
-  assert_listening_port "22" || die "SSH is not listening on port 22 after reload. / После reload SSH не слушает порт 22."
+  assert_ssh_ready "22" || die "SSH is not ready on port 22 after reload. / После reload SSH не готов на порту 22."
   if [[ "${SSH_PORT}" != "22" ]]; then
-    assert_listening_port "${SSH_PORT}" || die "SSH is not listening on port ${SSH_PORT} after reload. / После reload SSH не слушает порт ${SSH_PORT}."
+    assert_ssh_ready "${SSH_PORT}" || die "SSH is not ready on port ${SSH_PORT} after reload. / После reload SSH не готов на порту ${SSH_PORT}."
   fi
 }
 
@@ -1187,16 +1200,13 @@ configure_ssh_final() {
   [[ "${SSH_TEST_CONFIRMED}" == "yes" || "${SSH_PORT}" == "22" ]] || die "SSH finalization requires a confirmed SSH test. / Для финального SSH нужен подтверждённый тест входа."
 
   write_sshd_config "${ports[@]}"
-
-  if ssh_socket_managed; then
-    write_ssh_socket_override "${SSH_PORT}"
-  fi
+  disable_ssh_socket_activation
 
   ensure_run_sshd_dir
   sshd -t
   reload_ssh_stack
 
-  assert_listening_port "${SSH_PORT}" || die "SSH is not listening on port ${SSH_PORT} after finalization. / После финализации SSH не слушает порт ${SSH_PORT}."
+  assert_ssh_ready "${SSH_PORT}" || die "SSH is not ready on port ${SSH_PORT} after finalization. / После финализации SSH не готов на порту ${SSH_PORT}."
 }
 
 rewrite_ufw_icmp_block() {
